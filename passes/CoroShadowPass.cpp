@@ -1,6 +1,7 @@
 // CoroShadowPass.cpp
 #include "CoroShadowPass.h"
 #include "CoroDefenseAnalysis.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/Support/Debug.h"
@@ -49,6 +50,8 @@ PreservedAnalyses CoroShadowPass::run(Module &M, ModuleAnalysisManager &) {
     auto *FTy1 = FunctionType::get(VoidTy, {PtrTy}, false);
     FunctionCallee RegFn =
         M.getOrInsertFunction("__coro_shadow_register", FTy1);
+    FunctionCallee UpdateFn =
+        M.getOrInsertFunction("__coro_shadow_update", FTy1);
     FunctionCallee VerifyResumeFn =
         M.getOrInsertFunction("__coro_shadow_verify_resume", FTy1);
     FunctionCallee VerifyDestroyFn =
@@ -59,12 +62,14 @@ PreservedAnalyses CoroShadowPass::run(Module &M, ModuleAnalysisManager &) {
     bool HasCoros = A.run(M);
 
     // ── 1. Inject __coro_shadow_register in creation stubs ──────────────────
-    // Strategy: find the store of the resume function pointer in each ramp.
-    //           Insert the register call right after it.
+    // The frame base is the pointer the ramp stores the resume function into.
+    // We snapshot at the ramp's RETURN (not right after that store) so the
+    // whole frame is already initialised — crucially including the TypeID that
+    // the CFI pass writes into the header earlier in the ramp.
     if (HasCoros) {
         for (auto &Rec : A.Types) {
             if (!Rec.RampFn) continue;
-            Instruction *InsertAfter = nullptr;
+            Instruction *StoreInsn = nullptr;
             Value *FrameBase = nullptr;
 
             for (BasicBlock &BB : *Rec.RampFn) {
@@ -77,15 +82,29 @@ PreservedAnalyses CoroShadowPass::run(Module &M, ModuleAnalysisManager &) {
                     FrameBase = dyn_cast<GetElementPtrInst>(Dst)
                         ? cast<GetElementPtrInst>(Dst)->getPointerOperand()
                         : Dst;
-                    InsertAfter = &I;
+                    StoreInsn = &I;
                     break;
                 }
-                if (InsertAfter) break;
+                if (StoreInsn) break;
             }
-            if (!InsertAfter || !FrameBase) continue;
+            if (!StoreInsn || !FrameBase) continue;
 
-            IRBuilder<> B(InsertAfter->getNextNode());
-            B.CreateCall(RegFn, {FrameBase});
+            // Register before every return the frame base dominates.
+            DominatorTree DT(*Rec.RampFn);
+            auto *FBInst = dyn_cast<Instruction>(FrameBase);
+            bool inserted = false;
+            for (BasicBlock &BB : *Rec.RampFn) {
+                auto *Ret = dyn_cast<ReturnInst>(BB.getTerminator());
+                if (!Ret) continue;
+                if (FBInst && !DT.dominates(FBInst, Ret)) continue;
+                IRBuilder<>(Ret).CreateCall(RegFn, {FrameBase});
+                inserted = true;
+            }
+            // Fallback: no suitable return found — snapshot after the store.
+            if (!inserted) {
+                IRBuilder<> B(StoreInsn->getNextNode());
+                B.CreateCall(RegFn, {FrameBase});
+            }
         }
     }
 
@@ -113,11 +132,18 @@ PreservedAnalyses CoroShadowPass::run(Module &M, ModuleAnalysisManager &) {
             for (auto [CB, IsResume] : ToInstrument) {
                 Value *FramePtr = CB->getArgOperand(0);
                 IRBuilder<> B(CB);     // insert BEFORE the call
-                if (IsResume)
+                if (IsResume) {
                     B.CreateCall(VerifyResumeFn, {FramePtr});
-                else
+                    // After a legitimate resume the frame has advanced to its
+                    // next suspend point — refresh the snapshot so the next
+                    // verify compares against the new (still-trusted) state.
+                    if (auto *CI = dyn_cast<CallInst>(CB))
+                        IRBuilder<>(CI->getNextNode())
+                            .CreateCall(UpdateFn, {FramePtr});
+                } else {
                     // verify_and_remove: must happen before the real destroy
                     B.CreateCall(VerifyDestroyFn, {FramePtr});
+                }
             }
         }
     }

@@ -1,0 +1,20 @@
+diff --git a/llvm/lib/Transforms/Coroutines/CoroFrame.cpp b/llvm/lib/Transforms/Coroutines/CoroFrame.cpp
+index e69c718f0..6a53c4c72 100644
+--- a/llvm/lib/Transforms/Coroutines/CoroFrame.cpp
++++ b/llvm/lib/Transforms/Coroutines/CoroFrame.cpp
+@@ -1327,6 +1327,15 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
+       FrameData.setFieldIndex(
+           PromiseAlloca, B.addFieldForAlloca(PromiseAlloca, /*header*/ true));
+ 
++    // CFOP defense (Coroutine-Aware CFI): reserve a header slot for the
++    // per-type TypeID used by the dispatch-table CFI pass.  It MUST come
++    // AFTER the promise: the promise sits at the ABI-fixed offset that
++    // libstdc++/libc++ coroutine_handle::from_promise() assumes
++    // (align(2*ptr, alignof(promise))), so nothing may be inserted ahead of
++    // it or every handle would be mis-computed.  Placing it last in the
++    // header keeps that offset intact while giving the TypeID a stable slot.
++    (void)B.addField(Type::getInt32Ty(C), std::nullopt, /*header*/ true);
++
+     // Add a field to store the suspend index.  This doesn't need to
+     // be in the header.
+     unsigned IndexBits = std::max(1U, Log2_64_Ceil(Shape.CoroSuspends.size()));

@@ -1,10 +1,11 @@
 // AnalysisPlugin.cpp — standalone opt plugin
-#include "CoroDefenseAnalysis.h"
 #include "CoroAwareCFIPass.h"
+#include "CoroDefenseAnalysis.h"
 #include "CoroShadowPass.h"
+
 #include "llvm/IR/PassManager.h"
-#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -20,30 +21,30 @@ struct CoroAnalysisPrinterPass
         errs() << "[CoroDefense] Types found:\n";
         for (auto &R : A.Types) {
             errs() << "  TypeID=" << R.TypeID
-                   << "  ramp=" << (R.RampFn  ? R.RampFn->getName()  : "?")
+                   << "  ramp=" << (R.RampFn ? R.RampFn->getName() : "?")
                    << "  resume=" << (R.ResumeFn ? R.ResumeFn->getName() : "?")
-                   << "  destroy=" << (R.DestroyFn ? R.DestroyFn->getName() : "?")
-                   << "\n";
+                   << "  destroy="
+                   << (R.DestroyFn ? R.DestroyFn->getName() : "?") << "\n";
         }
-        errs() << "[CoroDefense] Call sites found: "
-               << A.CallSites.size() << "\n";
+        errs() << "[CoroDefense] Call sites found: " << A.CallSites.size()
+               << "\n";
         for (auto &S : A.CallSites) {
-            errs() << "  " << (S.IsResume ? "RESUME " : "DESTROY")
-                   << "  in " << S.Call->getFunction()->getName()
-                   << "\n";
+            errs() << "  " << (S.IsResume ? "RESUME " : "DESTROY") << "  in "
+                   << S.Call->getFunction()->getName() << "\n";
         }
         return PreservedAnalyses::all();
     }
 };
 
 extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
-    return {LLVM_PLUGIN_API_VERSION, "CoroDefense", "0.1",
-        [](PassBuilder &PB) {
-
+    return {
+        LLVM_PLUGIN_API_VERSION, "CoroDefense", "0.1", [](PassBuilder &PB) {
             // ── Explicit pipeline use ──────────────────────────────────────
-            // Lets you run:  opt --load-pass-plugin=... --passes="coro-aware-cfi"
+            // Lets you run:  opt --load-pass-plugin=...
+            // --passes="coro-aware-cfi"
             PB.registerPipelineParsingCallback(
-                [](StringRef Name, ModulePassManager &MPM,
+                [](StringRef Name,
+                   ModulePassManager &MPM,
                    ArrayRef<PassBuilder::PipelineElement>) -> bool {
                     if (Name == "coro-aware-cfi") {
                         MPM.addPass(CoroAwareCFIPass());
@@ -70,7 +71,8 @@ extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
                 [](ModulePassManager &MPM, OptimizationLevel OL) {
                     // Skip -O0: coroutine lowering behaves differently and
                     // the frame layout we depend on may not be present.
-                    if (OL == OptimizationLevel::O0) return;
+                    if (OL == OptimizationLevel::O0)
+                        return;
                     MPM.addPass(CoroAwareCFIPass());
                 });
         }};

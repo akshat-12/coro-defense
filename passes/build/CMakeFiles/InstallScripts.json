@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/akshat/workspace/coro-defense/passes/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -1,0 +1,10 @@
+# ninja log v5
+1	4110	1793176733264306941	CMakeFiles/CoroDefensePlugin.dir/AnalysisPlugin.cpp.o	cea9488de7bb9446
+4110	4238	1793176733392982429	CoroDefensePlugin.so	61d7ef7a391d4565
+0	1452	1793167167128907203	CMakeFiles/CoroDefensePlugin.dir/CoroDefenseAnalysis.cpp.o	4be03ebe2a31ea22
+0	91	1793176841913739829	build.ninja	b2f9ab241626a1e4
+0	91	1793176841913739829	/home/akshat/workspace/coro-defense/passes/build/cmake_install.cmake	b2f9ab241626a1e4
+2	2198	1793176844116949266	CMakeFiles/CoroDefensePlugin.dir/CoroAwareCFIPass.cpp.o	fca11574c81d99a5
+2198	2344	1793176844262757316	CoroDefensePlugin.so	c4e556c4e97b92d3
+2	4025	1793177933896148109	CMakeFiles/CoroDefensePlugin.dir/AnalysisPlugin.cpp.o	cea9488de7bb9446
+4025	4183	1793177934054424958	CoroDefensePlugin.so	c4e556c4e97b92d3

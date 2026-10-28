@@ -13,4 +13,5 @@ add_definitions(${LLVM_DEFINITIONS})
 add_llvm_pass_plugin(CoroDefensePlugin
     AnalysisPlugin.cpp
     CoroAwareCFIPass.cpp
+    CoroShadowPass.cpp
     CoroDefenseAnalysis.cpp)

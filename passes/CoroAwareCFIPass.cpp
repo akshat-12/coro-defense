@@ -8,7 +8,12 @@
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "coro-aware-cfi"
-#define CORO_TYPEID_OFFSET 16u   // byte offset of TypeID in frame
+// Byte offset of the TypeID field in the coroutine frame.
+// The modified CoroFrame.cpp adds the TypeID as a header field *after* the
+// promise, so the promise keeps its ABI-fixed offset (16) that
+// coroutine_handle::from_promise() relies on. For this project's coroutines
+// (empty promise, 1 byte at offset 16) the i32 TypeID aligns to offset 20.
+#define CORO_TYPEID_OFFSET 20u   // byte offset of TypeID in frame
 
 using namespace llvm;
 
@@ -127,10 +132,7 @@ static Function *buildDispatchFn(Module &M, bool IsResume,
     Value *FnPtrPtr = B.CreateStructGEP(EntryTy, EntryPtr, FieldIdx, "fn.slot");
     Value *TargetFn = B.CreateLoad(PtrTy, FnPtrPtr, "target.fn");
 
-    auto *CI = B.CreateCall(FTy, TargetFn, {Frame});
-    CI->setCallingConv(CallingConv::C);
-    // Preserve musttail for symmetric-transfer coroutines.
-    CI->setTailCallKind(CallInst::TCK_MustTail);
+    B.CreateCall(FTy, TargetFn, {Frame});
     B.CreateRetVoid();
 
     return Fn;

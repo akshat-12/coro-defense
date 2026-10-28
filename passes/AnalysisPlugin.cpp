@@ -1,6 +1,7 @@
 // AnalysisPlugin.cpp — standalone opt plugin
 #include "CoroDefenseAnalysis.h"
 #include "CoroAwareCFIPass.h"
+#include "CoroShadowPass.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -50,6 +51,10 @@ extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
                     }
                     if (Name == "coro-defense-analysis") {
                         MPM.addPass(CoroAnalysisPrinterPass());
+                        return true;
+                    }
+                    if (Name == "coro-shadow-analysis") {
+                        MPM.addPass(CoroShadowPass());
                         return true;
                     }
                     return false;

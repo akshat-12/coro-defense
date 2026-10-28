@@ -20,14 +20,97 @@ ATTACKER_FLAGS := -O1 -g
 VICTIM  := victim_server
 ATTACKER := attacker
 
-.PHONY: all run_victim run_attack run_attack_1 run_attack_2 run_attack_3 \
-        run_attack_4 run_attack_5 demo ir clean help
+# ── Defended build (Coroutine-Aware CFI) ───────────────────────────────────────
+# Must use the clang we rebuilt with the TypeID-after-promise frame change, and
+# load the CFI pass plugin so resume/destroy go through the read-only dispatch
+# table.  Override on the command line if your paths differ, e.g.:
+#   make victim_cfi DEFCLANG=/path/to/clang++ PLUGIN=/path/to/CoroDefensePlugin.so
+DEFCLANG := $(HOME)/workspace/llvm-build/bin/clang++
+PLUGIN   := ../passes/build/CoroDefensePlugin.so
+OPT      := $(HOME)/workspace/llvm-build/bin/opt
+RUNTIME  := $(HOME)/workspace/coro-defense/runtime/build
+
+# Victim variant binaries (all names must be defined before any target below
+# references them — make expands prerequisites at parse time).
+VICTIM_CFI    := victim_cfi
+VICTIM_SHADOW := victim_shadow
+VICTIM_BOTH   := victim_both
+
+.PHONY: all defended shadow both variants \
+        run_victim run_victim_cfi run_victim_shadow run_victim_both \
+        run_attack run_attack_1 run_attack_2 run_attack_3 run_attack_4 \
+        run_attack_5 demo ir clean help
 
 all: $(VICTIM) $(ATTACKER)
 
+defended: $(VICTIM_CFI) $(ATTACKER)
+
+# Build all four victim variants (plus the attacker):
+#   victim_server  — vulnerable, no defense
+#   victim_cfi     — Coroutine-Aware CFI only
+#   victim_shadow  — Shadow Stack only
+#   victim_both    — CFI + Shadow Stack
+variants: $(VICTIM) $(VICTIM_CFI) $(VICTIM_SHADOW) $(VICTIM_BOTH) $(ATTACKER)
+	@echo ""
+	@echo "Built all four victim variants: $(VICTIM) $(VICTIM_CFI) $(VICTIM_SHADOW) $(VICTIM_BOTH)"
+
+# Vulnerable baseline: SAME known-good compiler as the defended variants
+# (llvm-build, which has the TypeID-after-promise frame fix so coroutines run),
+# but with NO defense pass loaded.  This keeps the frame layout identical across
+# all four variants so the ONLY difference is the defense — note the stock
+# clang++ on PATH (llvm-install) is a stale build that mis-lowers coroutines and
+# crashes, so we deliberately do not use it here.
 $(VICTIM): victim_server.cpp
-	$(CXX) $(CXXFLAGS) $(VICTIM_FLAGS) -o $@ $<
-	@echo "Built: $@"
+	$(DEFCLANG) $(CXXFLAGS) $(VICTIM_FLAGS) -o $@ $<
+	@echo "Built: $@  (vulnerable baseline, no defense)"
+
+$(VICTIM_CFI): victim_server.cpp
+	$(DEFCLANG) $(CXXFLAGS) $(VICTIM_FLAGS) -fpass-plugin=$(PLUGIN) -o $@ $<
+	@echo "Built: $@  (Coroutine-Aware CFI enabled)"
+
+run_victim_cfi: $(VICTIM_CFI)
+	@echo "Starting DEFENDED victim server on 127.0.0.1:4444 …"
+	./$(VICTIM_CFI)
+
+# ── Shadow-only build (Shadow Stack, no CFI) ───────────────────────────────────
+# Loading the plugin with -fpass-plugin ALWAYS auto-runs CoroAwareCFIPass (it is
+# registered on the OptimizerLast extension point), so a plain clang build can
+# never give us the Shadow Stack by itself.  To get the shadow stack ALONE we go
+# through opt and explicitly select only the "coro-shadow-analysis" pass, then
+# link against the shadow-stack runtime (libcoroshadow.a).
+# Override paths on the command line if yours differ, e.g.:
+#   make shadow OPT=/path/to/opt RUNTIME=/path/to/runtime/build
+shadow: $(VICTIM_SHADOW) $(ATTACKER)
+
+$(VICTIM_SHADOW): victim_server.cpp
+	$(DEFCLANG) $(CXXFLAGS) $(VICTIM_FLAGS) -emit-llvm -S -o victim_shadow.ll $<
+	$(OPT) -load-pass-plugin=$(PLUGIN) -passes="coro-shadow-analysis" \
+	       -S victim_shadow.ll -o victim_shadow_opt.ll
+	$(DEFCLANG) -g victim_shadow_opt.ll -o $@ -L$(RUNTIME) -lcoroshadow -lpthread
+	@echo "Built: $@  (Shadow Stack only, no CFI)"
+
+run_victim_shadow: $(VICTIM_SHADOW)
+	@echo "Starting SHADOW-STACK victim server on 127.0.0.1:4444 …"
+	./$(VICTIM_SHADOW)
+
+# ── Both defenses (CFI + Shadow Stack) ─────────────────────────────────────────
+# Same opt-based route as the shadow-only build, but we select BOTH passes.
+# Order matters: coro-aware-cfi runs first (it replaces the raw indirect
+# resume/destroy calls with __coro_dispatch_* calls), then coro-shadow-analysis
+# wraps those dispatch calls with register/verify.  Links the shadow runtime.
+both: $(VICTIM_BOTH) $(ATTACKER)
+
+$(VICTIM_BOTH): victim_server.cpp
+	$(DEFCLANG) $(CXXFLAGS) $(VICTIM_FLAGS) -emit-llvm -S -o victim_both.ll $<
+	$(OPT) -load-pass-plugin=$(PLUGIN) \
+	       -passes="coro-aware-cfi,coro-shadow-analysis" \
+	       -S victim_both.ll -o victim_both_opt.ll
+	$(DEFCLANG) -g victim_both_opt.ll -o $@ -L$(RUNTIME) -lcoroshadow -lpthread
+	@echo "Built: $@  (Coroutine-Aware CFI + Shadow Stack)"
+
+run_victim_both: $(VICTIM_BOTH)
+	@echo "Starting CFI+SHADOW victim server on 127.0.0.1:4444 …"
+	./$(VICTIM_BOTH)
 
 $(ATTACKER): attacker.cpp
 	$(CXX) $(CXXFLAGS) $(ATTACKER_FLAGS) -o $@ $<
@@ -95,12 +178,19 @@ ir: ir_pre ir_post
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 clean:
-	rm -f $(VICTIM) $(ATTACKER) victim_pre.ll victim_post.ll
+	rm -f $(VICTIM) $(VICTIM_CFI) $(VICTIM_SHADOW) $(VICTIM_BOTH) $(ATTACKER) \
+	      victim_pre.ll victim_post.ll victim_cfi.ll \
+	      victim_shadow.ll victim_shadow_opt.ll \
+	      victim_both.ll victim_both_opt.ll
 
 help:
 	@echo "Targets:"
-	@echo "  all          Build victim_server and attacker"
-	@echo "  run_victim   Start the victim server (foreground)"
+	@echo "  all          Build victim_server (vulnerable) and attacker"
+	@echo "  defended     Build victim_cfi    (Coroutine-Aware CFI only)"
+	@echo "  shadow       Build victim_shadow (Shadow Stack only)"
+	@echo "  both         Build victim_both   (CFI + Shadow Stack)"
+	@echo "  variants     Build all four victim variants + attacker"
+	@echo "  run_victim[_cfi|_shadow|_both]  Start a given victim (foreground)"
 	@echo "  run_attack   Run all five attacks against a running victim"
 	@echo "  run_attack_N Run only attack N (1–5)"
 	@echo "  demo         Full automated demo (victim in background)"

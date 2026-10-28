@@ -156,16 +156,16 @@ static void reset_state() {
 
     void *wf = g_worker->handle.address();
     uint32_t tid = 0;
-    memcpy(&tid, (char*)wf + 16, sizeof(tid));
-    fprintf(stderr, "[DEBUG] worker TypeID at frame+16 = %u\n", tid);
-
-    void *pf = g_priv->handle.address();
-    memcpy(&tid, (char*)pf + 16, sizeof(tid));
-    fprintf(stderr, "[DEBUG] priv   TypeID at frame+16 = %u\n", tid);
+    memcpy(&tid, (char*)wf + 20, sizeof(tid));
+    fprintf(stderr, "[DEBUG] worker TypeID at frame+20 = %u\n", tid);
 
     // Create privileged coro: same safe pattern.
     { auto tmp = privileged_coro(); g_priv = new Task(std::move(tmp)); }
     g_priv->handle.resume();     // suspended at co_await (g_is_admin_ptr set)
+
+    void *pf = g_priv->handle.address();
+    memcpy(&tid, (char*)pf + 20, sizeof(tid));
+    fprintf(stderr, "[DEBUG] priv   TypeID at frame+20 = %u\n", tid);
 
     // Point the redirectable handle at the worker frame.
     g_redirectable_handle = g_worker->handle;

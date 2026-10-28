@@ -93,6 +93,16 @@ build CMakeFiles/CoroDefensePlugin.dir/CoroAwareCFIPass.cpp.o: CXX_COMPILER__Cor
   OBJECT_FILE_DIR = CMakeFiles/CoroDefensePlugin.dir
   TARGET_SUPPORT_DIR = CMakeFiles/CoroDefensePlugin.dir
 
+build CMakeFiles/CoroDefensePlugin.dir/CoroShadowPass.cpp.o: CXX_COMPILER__CoroDefensePlugin_unscanned_Debug /home/akshat/workspace/coro-defense/passes/CoroShadowPass.cpp || cmake_object_order_depends_target_CoroDefensePlugin
+  CONFIG = Debug
+  DEFINES = -DGTEST_HAS_RTTI=0
+  DEP_FILE = CMakeFiles/CoroDefensePlugin.dir/CoroShadowPass.cpp.o.d
+  FLAGS = -g -fPIC   -D_GNU_SOURCE -D_DEBUG -D_GLIBCXX_ASSERTIONS -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS  -fno-exceptions -funwind-tables -fno-rtti
+  INCLUDES = -I/home/akshat/workspace/llvm-install/include
+  OBJECT_DIR = CMakeFiles/CoroDefensePlugin.dir
+  OBJECT_FILE_DIR = CMakeFiles/CoroDefensePlugin.dir
+  TARGET_SUPPORT_DIR = CMakeFiles/CoroDefensePlugin.dir
+
 build CMakeFiles/CoroDefensePlugin.dir/CoroDefenseAnalysis.cpp.o: CXX_COMPILER__CoroDefensePlugin_unscanned_Debug /home/akshat/workspace/coro-defense/passes/CoroDefenseAnalysis.cpp || cmake_object_order_depends_target_CoroDefensePlugin
   CONFIG = Debug
   DEFINES = -DGTEST_HAS_RTTI=0
@@ -111,7 +121,7 @@ build CMakeFiles/CoroDefensePlugin.dir/CoroDefenseAnalysis.cpp.o: CXX_COMPILER__
 #############################################
 # Link the shared module CoroDefensePlugin.so
 
-build CoroDefensePlugin.so: CXX_MODULE_LIBRARY_LINKER__CoroDefensePlugin_Debug CMakeFiles/CoroDefensePlugin.dir/AnalysisPlugin.cpp.o CMakeFiles/CoroDefensePlugin.dir/CoroAwareCFIPass.cpp.o CMakeFiles/CoroDefensePlugin.dir/CoroDefenseAnalysis.cpp.o
+build CoroDefensePlugin.so: CXX_MODULE_LIBRARY_LINKER__CoroDefensePlugin_Debug CMakeFiles/CoroDefensePlugin.dir/AnalysisPlugin.cpp.o CMakeFiles/CoroDefensePlugin.dir/CoroAwareCFIPass.cpp.o CMakeFiles/CoroDefensePlugin.dir/CoroShadowPass.cpp.o CMakeFiles/CoroDefensePlugin.dir/CoroDefenseAnalysis.cpp.o
   CONFIG = Debug
   DEP_FILE = CMakeFiles/CoroDefensePlugin.dir/link.d
   LANGUAGE_COMPILE_FLAGS = -g

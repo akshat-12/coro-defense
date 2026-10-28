@@ -11,7 +11,7 @@ ROOT     := $(abspath $(TESTDIR)..)
 # ── Toolchain (override on the command line if your paths differ) ─────────────
 DEFCLANG ?= $(HOME)/workspace/llvm-build/bin/clang++
 OPT      ?= $(HOME)/workspace/llvm-build/bin/opt
-CXX      ?= clang++
+CXX      := clang++   # := (not ?=) so make's built-in g++ default doesn't win; CLI still overrides
 PLUGIN   ?= $(ROOT)/passes/build/CoroDefensePlugin.so
 RUNTIME  ?= $(ROOT)/runtime/build
 
@@ -22,16 +22,18 @@ CXXFLAGS           ?= -std=c++20 -Wall -Wextra
 VICTIM_FLAGS       ?= -O1 -fno-inline -g
 ATTACKER_FLAGS     ?= -O1 -g
 CFI_BASELINE_FLAGS ?= -flto=thin -fvisibility=hidden -fsanitize=cfi-icall -fuse-ld=lld
+CET_FLAGS          ?= -fcf-protection=full
 INCFLAGS           := -I$(TESTDIR)common
 
 # ── build_variants: $(call build_variants,<stem>) ────────────────────────────
 # Generates five build rules from <stem>.cpp (a coroutine victim):
 #   <stem>              vulnerable baseline (known-good compiler, no defense)
 #   <stem>_cfibaseline  stock -fsanitize=cfi-icall (the CFI "Await() a Second" evades)
+#   <stem>_cet          Intel CET -fcf-protection=full (IBT + shadow stack)
 #   <stem>_cfi          Coroutine-Aware CFI pass (read-only dispatch table)
 #   <stem>_shadow       whole-frame Shadow Stack (MPK)
 #   <stem>_both         CFI + Shadow
-# It also sets <stem>_VARIANTS (all five targets) and <stem>_CLEAN (intermediates).
+# It also sets <stem>_VARIANTS (all six targets) and <stem>_CLEAN (intermediates).
 define build_variants
 $(1): $(1).cpp
 	$$(DEFCLANG) $$(CXXFLAGS) $$(INCFLAGS) $$(VICTIM_FLAGS) -o $$@ $$<
@@ -40,6 +42,10 @@ $(1): $(1).cpp
 $(1)_cfibaseline: $(1).cpp
 	$$(DEFCLANG) $$(CXXFLAGS) $$(INCFLAGS) $$(VICTIM_FLAGS) $$(CFI_BASELINE_FLAGS) -o $$@ $$<
 	@echo "Built: $$@  (stock -fsanitize=cfi-icall baseline)"
+
+$(1)_cet: $(1).cpp
+	$$(DEFCLANG) $$(CXXFLAGS) $$(INCFLAGS) $$(VICTIM_FLAGS) $$(CET_FLAGS) -o $$@ $$<
+	@echo "Built: $$@  (Intel CET: -fcf-protection=full, IBT+SHSTK)"
 
 $(1)_cfi: $(1).cpp
 	$$(DEFCLANG) $$(CXXFLAGS) $$(INCFLAGS) $$(VICTIM_FLAGS) -fpass-plugin=$$(PLUGIN) -o $$@ $$<
@@ -57,7 +63,7 @@ $(1)_both: $(1).cpp
 	$$(DEFCLANG) -g $(1)_both_opt.ll -o $$@ -L$$(RUNTIME) -lcoroshadow -lpthread
 	@echo "Built: $$@  (CFI + Shadow)"
 
-$(1)_VARIANTS := $(1) $(1)_cfibaseline $(1)_cfi $(1)_shadow $(1)_both
+$(1)_VARIANTS := $(1) $(1)_cfibaseline $(1)_cet $(1)_cfi $(1)_shadow $(1)_both
 $(1)_CLEAN    := $(1)_shadow.ll $(1)_shadow_opt.ll $(1)_both.ll $(1)_both_opt.ll
 endef
 

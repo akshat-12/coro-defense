@@ -11,3 +11,8 @@
 2161	2332	1793195488967400596	CoroDefensePlugin.so	d7318e5dcbd86ba
 5	2361	1793201509428081282	CMakeFiles/CoroDefensePlugin.dir/CoroShadowPass.cpp.o	11cfff09177fa260
 2361	2589	1793201509656085074	CoroDefensePlugin.so	d7318e5dcbd86ba
+3	2276	1793207545574719690	CMakeFiles/CoroDefensePlugin.dir/CoroDefenseAnalysis.cpp.o	4be03ebe2a31ea22
+2	3424	1793207546720299961	CMakeFiles/CoroDefensePlugin.dir/CoroAwareCFIPass.cpp.o	fca11574c81d99a5
+3	3635	1793207546933479618	CMakeFiles/CoroDefensePlugin.dir/CoroShadowPass.cpp.o	11cfff09177fa260
+2	5873	1793207549168802068	CMakeFiles/CoroDefensePlugin.dir/AnalysisPlugin.cpp.o	cea9488de7bb9446
+5873	6108	1793207549405306588	CoroDefensePlugin.so	d7318e5dcbd86ba

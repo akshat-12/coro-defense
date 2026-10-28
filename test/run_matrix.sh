@@ -13,6 +13,7 @@ classify() {   # $1=logfile  $2=exitcode-or-"live"
   grep -qE "frame data tampered|unregistered frame|CoroShadow] ATTACK" "$log" 2>/dev/null && { echo "BLOCK(shadow)"; return; }
   [ "$ec" = "132" ] && { echo "BLOCK(SIGILL)"; return; }
   [ "$ec" = "134" ] && { echo "BLOCK(abort)"; return; }
+  [ "$ec" = "139" ] && { echo "BLOCK(SIGSEGV)"; return; }
   echo "neutralized"
 }
 
@@ -36,30 +37,38 @@ run_net() {    # $1=victim path  $2=attacker path  $3=port
   classify "$log" "$ec"
 }
 
-hdr() { printf "%-14s | %-10s %-13s %-12s %-14s %-14s\n" "$@"; }
-hdr "PRIMITIVE" "vulnerable" "cfibaseline" "coro-cfi" "shadow" "both"
-printf -- "---------------+---------------------------------------------------------------------\n"
+# Columns: the suffix appended to each victim stem (empty = vulnerable).
+VARIANTS=("" "_cfibaseline" "_cet" "_cfi" "_shadow" "_both")
+FMT="%-14s | %-10s %-13s %-10s %-12s %-14s %-14s\n"
 
-printf "%-14s | %-10s %-13s %-12s %-14s %-14s\n" "1 Overflow" \
-  "$(run_net overflow/overflow_victim            overflow/overflow_attacker 4445)" \
-  "$(run_net overflow/overflow_victim_cfibaseline overflow/overflow_attacker 4445)" \
-  "$(run_net overflow/overflow_victim_cfi        overflow/overflow_attacker 4445)" \
-  "$(run_net overflow/overflow_victim_shadow     overflow/overflow_attacker 4445)" \
-  "$(run_net overflow/overflow_victim_both       overflow/overflow_attacker 4445)"
+printf "$FMT" "PRIMITIVE" "vulnerable" "cfibaseline" "cet" "coro-cfi" "shadow" "both"
+printf -- "---------------+--------------------------------------------------------------------------------\n"
 
-printf "%-14s | %-10s %-13s %-12s %-14s %-14s\n" "2 UAF" \
-  "$(run_inproc uaf/uaf_poc)"             "$(run_inproc uaf/uaf_poc_cfibaseline)" \
-  "$(run_inproc uaf/uaf_poc_cfi)"         "$(run_inproc uaf/uaf_poc_shadow)" \
-  "$(run_inproc uaf/uaf_poc_both)"
+# 1 Overflow (networked :4445)
+row=(); for s in "${VARIANTS[@]}"; do row+=("$(run_net "overflow/overflow_victim$s" overflow/overflow_attacker 4445)"); done
+printf "$FMT" "1 Overflow" "${row[@]}"
 
-printf "%-14s | %-10s %-13s %-12s %-14s %-14s\n" "3 Scheduler" \
-  "$(run_net scheduler/sched_victim            scheduler/sched_attacker 4446)" \
-  "$(run_net scheduler/sched_victim_cfibaseline scheduler/sched_attacker 4446)" \
-  "$(run_net scheduler/sched_victim_cfi        scheduler/sched_attacker 4446)" \
-  "$(run_net scheduler/sched_victim_shadow     scheduler/sched_attacker 4446)" \
-  "$(run_net scheduler/sched_victim_both       scheduler/sched_attacker 4446)"
+# 2 UAF (in-process)
+row=(); for s in "${VARIANTS[@]}"; do row+=("$(run_inproc "uaf/uaf_poc$s")"); done
+printf "$FMT" "2 UAF" "${row[@]}"
+
+# 3 Scheduler (networked :4446)
+row=(); for s in "${VARIANTS[@]}"; do row+=("$(run_net "scheduler/sched_victim$s" scheduler/sched_attacker 4446)"); done
+printf "$FMT" "3 Scheduler" "${row[@]}"
 
 pkill -9 -x overflow_victim 2>/dev/null; pkill -9 -x sched_victim 2>/dev/null
+
+# CET enforcement status on this host (IBT/SHSTK are only ENFORCED with CPU+OS support).
+cet_hw="$(grep -oE 'user_shstk|shstk|ibt' /proc/cpuinfo 2>/dev/null | sort -u | paste -sd, -)"
 echo ""
-echo "HIJACKED = attack succeeded; neutralized = coro-cfi dispatched safely;"
-echo "BLOCK(shadow/abort/SIGILL) = defense stopped it."
+echo "Legend: HIJACKED = attack succeeded; neutralized = coro-cfi dispatched safely;"
+echo "        BLOCK(shadow/abort/SIGILL/SIGSEGV) = a defense stopped it."
+echo "Note:   'cet' is compiled with -fcf-protection=full (ELF property IBT,SHSTK)."
+if [ -z "$cet_hw" ]; then
+  echo "        This CPU exposes no CET feature, so CET is NOT hardware-enforced here."
+else
+  echo "        This CPU exposes CET: $cet_hw"
+fi
+echo "        Either way the hijack bypasses IBT by design: the gadget is a legit"
+echo "        address-taken function (has endbr64), and the shadow stack guards only"
+echo "        returns, not the forward indirect call through the coroutine frame."

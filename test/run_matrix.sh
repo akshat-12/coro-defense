@@ -11,6 +11,7 @@ classify() {   # $1=logfile  $2=exitcode-or-"live"
   local log="$1" ec="$2"
   grep -q "HIJACK_TARGET executing" "$log" 2>/dev/null && { echo "HIJACKED"; return; }
   grep -qE "frame data tampered|unregistered frame|CoroShadow] ATTACK" "$log" 2>/dev/null && { echo "BLOCK(shadow)"; return; }
+  grep -q "ACCESS GRANTED (is_admin=true)" "$log" 2>/dev/null && { echo "GRANTED(data)"; return; }
   [ "$ec" = "132" ] && { echo "BLOCK(SIGILL)"; return; }
   [ "$ec" = "134" ] && { echo "BLOCK(abort)"; return; }
   [ "$ec" = "139" ] && { echo "BLOCK(SIGSEGV)"; return; }
@@ -39,10 +40,10 @@ run_net() {    # $1=victim path  $2=attacker path  $3=port
 
 # Columns: the suffix appended to each victim stem (empty = vulnerable).
 VARIANTS=("" "_cfibaseline" "_cet" "_cfi" "_shadow" "_both")
-FMT="%-14s | %-10s %-13s %-10s %-12s %-14s %-14s\n"
+FMT="%-14s | %-14s %-14s %-14s %-14s %-14s %-14s\n"
 
 printf "$FMT" "PRIMITIVE" "vulnerable" "cfibaseline" "cet" "coro-cfi" "shadow" "both"
-printf -- "---------------+--------------------------------------------------------------------------------\n"
+printf -- "---------------+----------------------------------------------------------------------------------------\n"
 
 # 1 Overflow (networked :4445)
 row=(); for s in "${VARIANTS[@]}"; do row+=("$(run_net "overflow/overflow_victim$s" overflow/overflow_attacker 4445)"); done
@@ -56,12 +57,23 @@ printf "$FMT" "2 UAF" "${row[@]}"
 row=(); for s in "${VARIANTS[@]}"; do row+=("$(run_net "scheduler/sched_victim$s" scheduler/sched_attacker 4446)"); done
 printf "$FMT" "3 Scheduler" "${row[@]}"
 
+# 4 Fake-frame injection (networked :4448)
+row=(); for s in "${VARIANTS[@]}"; do row+=("$(run_net "fakeframe/fakeframe_victim$s" fakeframe/fakeframe_attacker 4448)"); done
+printf "$FMT" "4 Fake-frame" "${row[@]}"
+
+# 5 Data-only is_admin flip (networked :4447)
+row=(); for s in "${VARIANTS[@]}"; do row+=("$(run_net "dataonly/dataonly_victim$s" dataonly/dataonly_attacker 4447)"); done
+printf "$FMT" "5 Data-only" "${row[@]}"
+
 pkill -9 -x overflow_victim 2>/dev/null; pkill -9 -x sched_victim 2>/dev/null
+pkill -9 -x fakeframe_victim 2>/dev/null; pkill -9 -x dataonly_victim 2>/dev/null
 
 # CET enforcement status on this host (IBT/SHSTK are only ENFORCED with CPU+OS support).
 cet_hw="$(grep -oE 'user_shstk|shstk|ibt' /proc/cpuinfo 2>/dev/null | sort -u | paste -sd, -)"
 echo ""
-echo "Legend: HIJACKED = attack succeeded; neutralized = coro-cfi dispatched safely;"
+echo "Legend: HIJACKED = control-flow hijack succeeded; neutralized = coro-cfi dispatched safely;"
+echo "        GRANTED(data) = data-only attack succeeded (control-flow defenses are blind to it;"
+echo "        only the whole-frame shadow stack blocks it);"
 echo "        BLOCK(shadow/abort/SIGILL/SIGSEGV) = a defense stopped it."
 echo "Note:   'cet' is compiled with -fcf-protection=full (ELF property IBT,SHSTK)."
 if [ -z "$cet_hw" ]; then

@@ -255,7 +255,7 @@ observable: a call lands in `hijack_target()`
 Builds use `-O1 -fno-inline -g` so frames stay on the heap.
 
 We provide **two tiers**: a didactic harness that isolates the mechanism, and
-three bug-driven PoCs that match the paper's realistic threat model.
+five bug-driven PoCs that match the paper's realistic threat model.
 
 ### 5.1 Didactic harness — `generic/` (TCP :4444)
 
@@ -309,6 +309,26 @@ extra power is an assumed info leak. These match the paper's model.
   pops and resumes the stale handle, control is hijacked. This is the
   **temporal** variant that makes coroutines special — a suspended continuation
   living in a queue, long after its owner is gone.
+
+- **Primitive 4 — fake-frame injection.** `fakeframe/` (TCP :4448,
+  [test/fakeframe/fakeframe_victim.cpp](../test/fakeframe/fakeframe_victim.cpp)).
+  Unlike primitives 1–3, which corrupt a *real* frame, here the attacker crafts
+  an **entirely fake frame** in a buffer it controls and redirects a *stored*
+  `coroutine_handle` at it. The bug is a heap overflow of a
+  `struct Session { char buf[64]; coroutine_handle<> h; }` whose `buf` overflow
+  overwrites the adjacent handle pointer `h` with the address of an
+  attacker-staged scratch buffer; resuming `h` then calls the fake frame's
+  resume pointer. This is the realistic form of the didactic "attack 4".
+
+- **Primitive 5 — data-only attack.** `dataonly/` (TCP :4447,
+  [test/dataonly/dataonly_victim.cpp](../test/dataonly/dataonly_victim.cpp)).
+  The privileged coroutine keeps a security decision (`is_admin`) and a
+  frame-resident `prefs[]` array live across a suspend. The bug is a classic
+  **unchecked indexed write** (`prefs[idx] = val`, `idx` attacker-controlled),
+  so a large/negative index reaches the `is_admin` byte. **No pointer is
+  touched** — it flips a *decision*, not a control-flow target. This is the
+  realistic form of the didactic "attack 3", and it is the case that *no*
+  control-flow defense can stop (see §7).
 
 ---
 
@@ -477,32 +497,47 @@ known-good compiler with no defense; `cfibaseline` is stock
 are our defenses. (`make matrix` from `test/`.)
 
 ```
-PRIMITIVE      | vulnerable cfibaseline   cet        coro-cfi     shadow         both
----------------+--------------------------------------------------------------------------------
-1 Overflow     | HIJACKED   HIJACKED      HIJACKED   neutralized  BLOCK(shadow)  BLOCK(shadow)
-2 UAF          | HIJACKED   HIJACKED      HIJACKED   neutralized  BLOCK(shadow)  BLOCK(shadow)
-3 Scheduler    | HIJACKED   HIJACKED      HIJACKED   neutralized  BLOCK(shadow)  BLOCK(shadow)
+PRIMITIVE      | vulnerable     cfibaseline    cet            coro-cfi       shadow         both
+---------------+----------------------------------------------------------------------------------------
+1 Overflow     | HIJACKED       HIJACKED       HIJACKED       neutralized    BLOCK(shadow)  BLOCK(shadow)
+2 UAF          | HIJACKED       HIJACKED       HIJACKED       neutralized    BLOCK(shadow)  BLOCK(shadow)
+3 Scheduler    | HIJACKED       HIJACKED       HIJACKED       neutralized    BLOCK(shadow)  BLOCK(shadow)
+4 Fake-frame   | HIJACKED       HIJACKED       HIJACKED       neutralized    BLOCK(shadow)  BLOCK(shadow)
+5 Data-only    | GRANTED(data)  GRANTED(data)  GRANTED(data)  GRANTED(data)  BLOCK(shadow)  BLOCK(shadow)
 ```
 
-For the didactic harness, additionally: attacks 1/2/4/5 behave like the
-control-flow column above, and **attack 3 (data-only) is HIJACKED under
-everything except `shadow`/`both`**.
+Legend: `HIJACKED` = control-flow hijack executed; `neutralized` = coro-CFI
+dispatched through its read-only table so the hijack never ran (process
+survives); `GRANTED(data)` = the data-only attack succeeded (the privileged
+branch ran); `BLOCK(shadow)` = the shadow stack detected tampering and
+`abort()`ed. (The didactic harness's five attacks behave the same way: 1/2/4/5
+like the control-flow rows, attack 3 like the data-only row.)
 
 **Reading the result.**
 
-- **`cfibaseline` = HIJACKED** reproduces *Await() a Second* on this setup:
-  genuine forward-edge CFI does not instrument the coroutine resume edge.
-- **`cet` = HIJACKED**: IBT only requires the target be *some* `endbr64`, and
-  `hijack_target` (an address-taken function) has one; the shadow stack guards
-  only returns. **Caveat:** this CPU exposes no CET feature, so CET is compiled-in
-  (property present, `endbr64` emitted) but **not hardware-enforced here** — the
-  result is the expected one either way, but to claim *enforced-and-bypassed* you
-  must rerun on CET-capable hardware (Tiger Lake+/Zen3+, kernel ≥ 6.6,
-  glibc ≥ 2.39).
-- **`coro-cfi` = neutralized**: it stops the *hijack* but, for UAF/scheduler, the
-  program still resumed a freed frame — CFI guarantees control-flow integrity,
-  not memory safety. The shadow is stronger there (it detects the stale frame and
-  aborts).
+- **`cfibaseline` = HIJACKED** (rows 1–4) reproduces *Await() a Second* on this
+  setup: genuine forward-edge CFI does not instrument the coroutine resume edge.
+- **`cet` = HIJACKED** (rows 1–4): IBT only requires the target be *some*
+  `endbr64`, and `hijack_target` (an address-taken function) has one; the shadow
+  stack guards only returns. **Caveat:** this CPU exposes no CET feature, so CET
+  is compiled-in (property present, `endbr64` emitted) but **not hardware-enforced
+  here** — the result is the expected one either way, but to claim
+  *enforced-and-bypassed* you must rerun on CET-capable hardware (Tiger Lake+/
+  Zen3+, kernel ≥ 6.6, glibc ≥ 2.39).
+- **`coro-cfi` = neutralized** (rows 1–4): it stops the *hijack* but, for
+  UAF/scheduler/fake-frame, the program still resumed a freed/forged frame — CFI
+  guarantees control-flow integrity, not memory safety. For the fake-frame case,
+  the forged TypeID can at most index the read-only dispatch table (here a noop),
+  so no attacker code runs. The shadow is stronger: it detects the stale/forged
+  frame (`unregistered frame`) and aborts.
+- **Row 5 (data-only) is the decisive one.** It is `GRANTED(data)` under *every*
+  control-flow defense — stock CFI, CET, **and our coro-aware CFI** — because it
+  corrupts a spilled `bool`, not a pointer; the resume edge is never diverted. It
+  is blocked **only** by the whole-frame shadow stack, whose byte-for-byte
+  comparison catches the flip (`frame data tampered`). This is the empirical
+  statement of the defense taxonomy: control-flow integrity, however complete,
+  cannot address data-only corruption; that needs data integrity (here, the
+  MPK-protected whole-frame shadow).
 
 ---
 
@@ -546,6 +581,8 @@ coro-defense/
     overflow/   overflow_victim.cpp overflow_attacker.cpp # Primitive 1 (:4445)
     uaf/        uaf_poc.cpp                                # Primitive 2 (in-process)
     scheduler/  sched_victim.cpp sched_attacker.cpp        # Primitive 3 (:4446)
+    dataonly/   dataonly_victim.cpp dataonly_attacker.cpp  # Primitive 5 (:4447)
+    fakeframe/  fakeframe_victim.cpp fakeframe_attacker.cpp # Primitive 4 (:4448)
 ```
 
 ```bash

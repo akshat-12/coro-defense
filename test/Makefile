@@ -5,6 +5,8 @@
 #   overflow/   Primitive 1: heap overflow into adjacent frame   (:4445)
 #   uaf/        Primitive 2: use-after-free reclaim (in-process)
 #   scheduler/  Primitive 3: dangling handle in scheduler queue  (:4446)
+#   dataonly/   Data-only: flip is_admin in the frame            (:4447)
+#   fakeframe/  Fake-frame injection via redirected handle       (:4448)
 #
 # Usage:
 #   make            build the vulnerable victim(s) + attacker(s) in every folder
@@ -14,7 +16,7 @@
 #   make clean      clean every folder
 # Each folder also works standalone: `cd overflow && make run`.
 
-BENCHES := generic overflow uaf scheduler
+BENCHES := generic overflow uaf scheduler dataonly fakeframe
 
 .PHONY: all variants matrix clean $(BENCHES)
 

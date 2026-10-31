@@ -87,6 +87,33 @@ The caller then drives it with `handle.resume()`. `final_suspend()` returning
 stays alive (parked at the final suspend) until someone calls `destroy()`. Both
 facts matter for the attacks below.
 
+**Example — a coroutine that suspends twice, and its drive loop.** This is the
+shape every victim in this project uses:
+
+```cpp
+static Task worker(int id) {
+    printf("worker %d: A\n", id);     // runs on the 1st resume
+    co_await std::suspend_always{};   // suspend #1  <-- parks here after "A"
+    printf("worker %d: B\n", id);     // runs on the 2nd resume
+    co_await std::suspend_always{};   // suspend #2
+    printf("worker %d: done\n", id);  // runs on the 3rd resume, then co_return
+}
+
+int main() {
+    Task t = worker(1);   // allocate frame; initial_suspend parks BEFORE "A"
+    t.handle.resume();    // -> "worker 1: A",   now parked at suspend #1
+    t.handle.resume();    // -> "worker 1: B",   now parked at suspend #2
+    t.handle.resume();    // -> "worker 1: done", now t.handle.done() == true
+}                         // ~Task -> t.handle.destroy() frees the frame
+```
+
+Each `resume()` does the same two machine steps: **load the resume function
+pointer out of the frame and call it** (§2). That function reads the *resume
+index* stored in the frame to jump to the right continuation (before `A`, then
+`#1`, then `#2`). The whole "where am I in this function" state lives in the
+heap frame, not on any stack — which is exactly why corrupting the frame is so
+powerful.
+
 ---
 
 ## 2. The coroutine frame: layout in memory
@@ -136,6 +163,44 @@ the Switch ABI they always point at the coroutine's single `.resume`/`.destroy`
 stub, and the *index* field selects where execution continues. That stability is
 what lets a pointer-only shadow be meaningful — and what the whole-frame shadow
 extends.
+
+**Example — the frame struct and a byte view.** For `worker()` above, LLVM
+emits a frame type like this (schematic, field names ours):
+
+```llvm
+%worker.Frame = type {
+  ptr,            ; +0   resume  stub  (@worker.resume)
+  ptr,            ; +8   destroy stub  (@worker.destroy)
+  %promise_type,  ; +16  promise object (empty here -> 1 byte + padding)
+  i32,            ; +20  TypeID   (our CoroFrame.cpp addition; 0 in stock clang)
+  i2,             ; +24  suspend/resume index (2 suspend points -> 2 bits)
+  i32             ; +28  spilled local `id`
+}
+```
+
+A live, parked frame then looks like this in memory (addresses illustrative):
+
+```
+frame @ 0x5555_0000_42b0
+ +0  40 50 16 6e ...   resume_fn  = 0x0000_6e16_5040   <- called by resume()
+ +8  70 51 16 6e ...   destroy_fn = 0x0000_6e16_5170   <- called by destroy()
+ +16 00                promise (empty)
+ +20 01 00 00 00       TypeID = 1
+ +24 .. ..             index + spilled `id`
+```
+
+**Example — what `handle.resume()` compiles to.** It is `__builtin_coro_resume`
+over the frame, i.e. an indirect call through `frame[0]`:
+
+```asm
+; rdi = frame
+mov   rax, [rdi]      ; rax = frame[0]  = resume_fn  (loaded from WRITABLE heap)
+call  rax            ; <-- the hijackable edge; rdi (=frame) is the argument
+```
+
+Every attack in §5 ends by making that one load return a value the attacker
+chose. There is no type check on `rax` here beyond what a generic CFI mechanism
+adds — and §4/§7 show those mechanisms don't cover this edge.
 
 ---
 
@@ -195,6 +260,52 @@ stub functions, and a heap struct whose first two words are the
 resume/destroy pointers. Our analysis pass (§6) recovers exactly that structure
 from the post-split IR.
 
+**Example — before and after `CoroSplit` (schematic).** Front-end IR for
+`worker()` is one function full of coroutine intrinsics:
+
+```llvm
+define ptr @worker(i32 %id) {                 ; the single pre-split function
+entry:
+  %id.addr = ...
+  %promise = alloca %promise_type
+  %id2  = call token @llvm.coro.id(i32 0, ptr %promise, ptr null, ptr null)
+  %size = call i64 @llvm.coro.size.i64()
+  %mem  = call ptr @operator.new(i64 %size)   ; heap-allocate the frame
+  %hdl  = call ptr @llvm.coro.begin(token %id2, ptr %mem)
+  ...                                         ; body, with:
+  %s = call i8 @llvm.coro.suspend(token none, i1 false)  ; each co_await
+  switch i8 %s, label %suspend [ i8 0, label %resume  i8 1, label %cleanup ]
+  ...
+  call i1 @llvm.coro.end(ptr %hdl, i1 false)
+}
+```
+
+`CoroSplit` turns that into a **ramp** plus **stubs**, and materializes the
+frame type:
+
+```llvm
+%worker.Frame = type { ptr, ptr, %promise_type, i32, i2, i32 }  ; see §2
+
+define ptr @worker(i32 %id) {                 ; RAMP (what the caller calls)
+  %mem = call ptr @operator.new(i64 40)
+  store ptr @worker.resume,  ptr %mem               ; frame[0]
+  store ptr @worker.destroy, ptr getelementptr(... i32 1)  ; frame[8]
+  ; store i32 1 into frame+20  <-- added by our CFI pass (§6.2)
+  ...                                                ; run up to initial_suspend
+  ret ptr %mem                                       ; return handle, parked
+}
+define void @worker.resume(ptr %frame) { ... switch on frame's index ... }
+define void @worker.destroy(ptr %frame) { ... }
+```
+
+And the promise-offset constraint from `CoroEarly` is literally a GEP to field
+2 of the mock struct:
+
+```llvm
+; coroutine_handle::from_promise(p)  /  .promise()  lowers to +/- 16:
+%frame   = getelementptr i8, ptr %promise, i64 -16   ; promise is at frame+16
+```
+
 ---
 
 ## 4. *Await() a Second*: the CFOP finding
@@ -239,6 +350,30 @@ frames and the time they are exposed.
 (protecting the resume/destroy edge specifically, rather than relying on generic
 CFI). Our defenses in §6 are an implementation and extension of that direction.
 
+**Example — the hijack in five lines, and what each defense sees.** Given a
+leak and a write primitive from a memory bug:
+
+```c
+void *frame  = leak_live_frame();        // info leak defeats ASLR
+void *gadget = base + OFF_hijack_target; // a leaked code address (function entry)
+
+// the memory-corruption bug writes 8 bytes here:
+*(void **)frame = gadget;                // overwrite frame[0] (the resume ptr)
+
+handle_resume(frame);   // victim does: mov rax,[frame]; call rax  -> gadget(frame)
+```
+
+What the deployed defenses observe at that `call rax`:
+
+| Defense | What it checks here | Result |
+|---|---|---|
+| `cfi-icall` | only *source-level* fnptr calls; this is a compiler builtin | not instrumented → **passes** |
+| CET **IBT** | target must start with `endbr64`; `gadget` is a function entry | has `endbr64` → **passes** |
+| CET **shadow stack** | return addresses | not a return → **irrelevant** |
+
+That is the whole finding: the one load-and-call that drives a coroutine is a
+control-flow edge the deployed defenses do not guard.
+
 > **Verify before citing.** Treat the above as the conceptual thesis. Exact
 > numbers (how many frames, overheads, which CVEs/programs, the precise formal
 > model) belong to the paper; do not quote figures from this document as if they
@@ -279,6 +414,25 @@ coroutine mechanism from the question of how the write was obtained. Attack 3 is
 the important outlier: it is **data-only** — it hijacks a *decision*, not a
 pointer — and therefore cannot be stopped by any control-flow defense.
 
+**Example — attack 1 (resume-pointer overwrite) on the wire** (`make -C generic
+run_attack_1`). The attacker leaks, writes `&hijack_target` over `frame[0]`, and
+triggers a resume:
+
+```
+[ATTACKER] Connected  victim says: READY victim_server pid=2002430
+[ATTACKER] Leaked:  worker_frame 0x55…2b0   resume_fn 0x55…5040
+                    hijack_target 0x55…4f60
+[ATTACKER] frame[0] is at 0x55…2b0; overwriting it with hijack_target…
+[ATTACKER]   WRITE 55…2b0 8 604f…  -> OK wrote 8 bytes
+[ATTACKER]   TRIGGER RESUME        -> OK
+--- victim stderr ---
+[VICTIM] <- "WRITE 55…2b0 8 604f…"
+[VICTIM] <- "TRIGGER RESUME"
+[VICTIM] ╔══════════════════════════════════════════════╗
+[VICTIM] ║  HIJACK_TARGET executing inside victim PID …  ║   <-- hijack fired
+[VICTIM]  id -> uid=1001(akshat) …
+```
+
 ### 5.2 Realistic primitives — bug-driven PoCs
 
 Here the corruption comes from a **real memory-safety bug**; the attacker's only
@@ -292,6 +446,13 @@ extra power is an assumed info leak. These match the paper's model.
   `hijack_target`. Constrained primitive: anchored at one buffer, forward,
   contiguous.
 
+  ```
+  [VICTIM] buf=0x…670 frame=0x…6c0 delta=80 resume_fn=0x…930
+  [ATTACKER] overflow (80 filler + 8-byte ptr) -> OK copied 88 bytes into a 64-byte buffer
+  [ATTACKER] RESUME -> OK
+  [VICTIM] *** HIJACK_TARGET executing inside PID … ***
+  ```
+
 - **Primitive 2 — use-after-free reclaim.** `uaf/` (in-process,
   [test/uaf/uaf_poc.cpp](../test/uaf/uaf_poc.cpp)). The frame is `destroy()`'d
   while a `coroutine_handle` to it is still held — the single most common
@@ -301,6 +462,13 @@ extra power is an assumed info leak. These match the paper's model.
   in the narrow window between free and resume, which is deterministic via the
   allocator's tcache but awkward to drive remotely.
 
+  ```
+  [VICTIM] frame=0x…2b0 usable=24   (bug) frame freed; dangling handle kept
+  [ATTACKER] reclaim=0x…2b0 (== freed frame, reclaimed)
+  [ATTACKER] planted hijack_target in reclaimed frame[0]/[8]
+  [VICTIM] resuming dangling handle... -> *** HIJACK_TARGET executing ***
+  ```
+
 - **Primitive 3 — dangling handle in a scheduler queue.** `scheduler/` (TCP
   :4446, [test/scheduler/sched_victim.cpp](../test/scheduler/sched_victim.cpp)).
   A mini async scheduler keeps handles in a ready-queue for later resumption.
@@ -309,6 +477,13 @@ extra power is an assumed info leak. These match the paper's model.
   pops and resumes the stale handle, control is hijacked. This is the
   **temporal** variant that makes coroutines special — a suspended continuation
   living in a queue, long after its owner is gone.
+
+  ```
+  [VICTIM] frame=0x…8d0 usable=24 reclaim=0x…8d0 (reclaimed freed frame)
+  [ATTACKER] STAGE -> OK staged 16 bytes into the reclaimed frame
+  [ATTACKER] RUN   -> OK
+  [VICTIM] scheduler resuming queued handle 0x…8d0... -> *** HIJACK_TARGET executing ***
+  ```
 
 - **Primitive 4 — fake-frame injection.** `fakeframe/` (TCP :4448,
   [test/fakeframe/fakeframe_victim.cpp](../test/fakeframe/fakeframe_victim.cpp)).
@@ -320,6 +495,14 @@ extra power is an assumed info leak. These match the paper's model.
   attacker-staged scratch buffer; resuming `h` then calls the fake frame's
   resume pointer. This is the realistic form of the didactic "attack 4".
 
+  ```
+  [VICTIM] buf=0x…a10 handle_store=0x…a50 scratch=0x…120
+  [ATTACKER] STAGE (fake frame: resume=destroy=hijack_target) -> OK
+  [ATTACKER] overflow (64 filler + handle ptr=&scratch)       -> OK
+  [ATTACKER] TRIGGER -> OK
+  [VICTIM] resuming stored handle 0x…120... -> *** HIJACK_TARGET executing ***
+  ```
+
 - **Primitive 5 — data-only attack.** `dataonly/` (TCP :4447,
   [test/dataonly/dataonly_victim.cpp](../test/dataonly/dataonly_victim.cpp)).
   The privileged coroutine keeps a security decision (`is_admin`) and a
@@ -329,6 +512,14 @@ extra power is an assumed info leak. These match the paper's model.
   touched** — it flips a *decision*, not a control-flow target. This is the
   realistic form of the didactic "attack 3", and it is the case that *no*
   control-flow defense can stop (see §7).
+
+  ```
+  [VICTIM] frame=0x…670 prefs=0x…690 is_admin=0x…6a2
+  [ATTACKER] prefs=0x…690 is_admin=0x…6a2 -> prefs[18] is the is_admin byte
+  [ATTACKER] (no pointer touched — control-flow defenses are blind to this)
+  [ATTACKER] SETPREF 18 1 -> OK ;  TRIGGER -> OK granted=true
+  [VICTIM] priv: *** ACCESS GRANTED (is_admin=true) ***
+  ```
 
 ---
 
@@ -354,6 +545,16 @@ slot (offset 20 for an empty promise); it just stays 0 unless the CFI pass fills
 it. This is why all benchmark variants — vulnerable, CFI, shadow, both — share
 one identical frame layout, so the only experimental variable is the defense.
 
+**Example — the frame type, stock vs. our clang:**
+
+```llvm
+; stock clang:              { ptr, ptr, %promise, i2, i32 }
+;                             +0   +8    +16     idx  spilled
+; our clang (TypeID added): { ptr, ptr, %promise, i32, i2, i32 }
+;                             +0   +8    +16     +20  idx  spilled
+;                                          ^promise stays at 16 (ABI); TypeID at 20
+```
+
 ### 6.1 Pass 1 — `CoroDefenseAnalysis` (shared discovery)
 
 [passes/CoroDefenseAnalysis.cpp](../passes/CoroDefenseAnalysis.cpp). Not a
@@ -368,6 +569,23 @@ transform; both defenses call it first.
   the argument; the accumulated byte offset classifies it — **0 ⇒ resume,
   8 ⇒ destroy**. (`stripAndAccumulateConstantOffsets` makes this robust to GEPs
   and bitcasts.)
+
+**Example — what it finds** (its `LLVM_DEBUG` output on the generic victim):
+
+```
+[CoroDefense] Found 2 coroutine types
+  TypeID=1  worker_coro
+  TypeID=2  privileged_coro
+[CoroDefense] Found 4 coroutine call sites
+```
+
+And the exact IR shape it matches as a "resume site" (offset 0) — this is what
+`replaceCallSites`/`CoroShadowPass` rewrite or wrap:
+
+```llvm
+%fp = load ptr, ptr %frame        ; load from frame + 0
+call void %fp(ptr %frame)         ; indirect, 1 ptr arg, callee loaded from arg  => RESUME
+```
 
 ### 6.2 Defense A — Coroutine-Aware CFI (`CoroAwareCFIPass`)
 
@@ -395,6 +613,41 @@ dispatch through a **read-only, type-keyed table**.
 
 **Registration:** this pass is on the **OptimizerLast** extension point, so
 simply loading the plugin with `-fpass-plugin` runs it automatically at `-O1+`.
+
+**Example — what the pass emits** (schematic). The read-only table and the
+dispatcher:
+
+```llvm
+; .rodata, constant: slot[0]=noop, slot[i]=the real stubs for TypeID i
+@__coro_dispatch_table = constant [3 x {ptr,ptr}] [
+    {ptr @__coro_noop_resume, ptr @__coro_noop_destroy},   ; 0: noop_coroutine
+    {ptr @worker_coro.resume, ptr @worker_coro.destroy},   ; 1
+    {ptr @privileged_coro.resume, ptr @privileged_coro.destroy} ; 2
+], section ".rodata"
+
+define internal void @__coro_dispatch_resume(ptr %frame) noinline nounwind {
+  %tid = load i32, ptr getelementptr(i8, ptr %frame, i64 20)   ; TypeID @ frame+20
+  %ok  = icmp ult i32 %tid, 3                                  ; bounds check
+  br i1 %ok, label %dispatch, label %oob
+oob:      call void @llvm.trap()  unreachable                  ; SIGILL
+dispatch: %e  = getelementptr [3 x {ptr,ptr}], @__coro_dispatch_table, i32 0, i32 %tid
+          %fp = load ptr, ptr %e            ; trusted resume_fn from .rodata
+          call void %fp(ptr %frame)  ret void
+}
+```
+
+**Example — the call-site rewrite** (`replaceCallSites`):
+
+```llvm
+; BEFORE (hijackable: target comes from the writable frame)
+%fp = load ptr, ptr %frame
+call void %fp(ptr %frame)
+; AFTER (target comes from the read-only table, keyed by frame+20)
+call void @__coro_dispatch_resume(ptr %frame)
+```
+
+So overwriting `frame[0]` no longer changes the call target — only the TypeID at
+`frame+20` selects it, and that only indexes the read-only table.
 
 **Guarantee / limits.** A corrupted `frame[0]`/`frame[8]` is *ignored* — the real
 body runs and the process survives ("neutralized"), so it is graceful (no DoS).
@@ -435,6 +688,26 @@ calls:
   has advanced to its next suspend point). Destroy gets
   `__coro_shadow_verify_and_remove_destroy` before, and no update.
 
+**Example — an instrumented resume site** (schematic):
+
+```llvm
+; BEFORE                         ; AFTER (shadow-only build)
+%fp = load ptr, ptr %frame       call void @__coro_shadow_verify_resume(ptr %frame) ; check
+call void %fp(ptr %frame)        %fp = load ptr, ptr %frame
+                                 call void %fp(ptr %frame)                           ; real resume
+                                 call void @__coro_shadow_update(ptr %frame)         ; re-snapshot
+```
+
+And the register call placed at the ramp's return:
+
+```llvm
+define ptr @worker(i32 %id) {            ; ramp
+  ...                                     ; header + TypeID all initialised
+  call void @__coro_shadow_register(ptr %frame)   ; snapshot the parked frame
+  ret ptr %frame
+}
+```
+
 **Registration:** this pass is addressable only via the pipeline parser (not
 auto-inserted), which is why the `shadow`/`both` builds go compile-to-IR →
 `opt -passes=...` → link against the runtime.
@@ -465,6 +738,31 @@ auto-inserted), which is why the `shadow`/`both` builds go compile-to-IR →
   `resume_fn`/`destroy_fn` (bytes differ at offset 0/8) from a pure
   `frame data tampered` data-only attack.
 
+**Example — the shadow entry and the startup line:**
+
+```c
+typedef struct __attribute__((aligned(64))) {
+    uintptr_t frame_ptr;         // key (0 = empty)
+    uint32_t  flags, snap_len;
+    uint8_t   snapshot[256];     // trusted copy of the frame
+} ShadowEntry;                   // 4096-slot open-addressed table, MPK-protected
+```
+
+```
+[CoroShadow] shadow stack ready (MPK, 4096 slots, 256 B/frame)   # or "mprotect fallback"
+```
+
+**Example — the three ways it aborts**, one per attack class:
+
+```
+# pointer overwrite (overflow / direct):
+[CoroShadow] ATTACK: resume_fn tampered on frame 0x…  expected 0x…550  got 0x…470
+# data-only flip (is_admin):
+[CoroShadow] ATTACK: frame data tampered on 0x… before resume (no pointer touched …)
+# UAF / fake-frame (the frame was never registered, or was removed on destroy):
+[CoroShadow] ATTACK: unregistered frame 0x… passed to resume()
+```
+
 **Guarantee / limits.** Blocks all control-flow attacks (pointer mismatch), the
 data-only flip (byte mismatch), and UAF/scheduler reuse (unregistered-frame
 check) — all by `abort()`. That is louder than CFI: it crashes the process (a
@@ -485,6 +783,15 @@ control-flow cases — which is why `both` reports `BLOCK(shadow)`.
 |---|---|---|---|---|
 | **Coro-CFI** | blocked (pointer ignored) | blocked (TypeID dispatch / trap) | **missed** | graceful (survives) |
 | **Shadow** | blocked (mismatch) | blocked (unregistered) | **blocked** (mismatch) | `abort()` |
+
+**Example — a resume site in `both` mode.** Verify runs first, so the shadow's
+`abort()` wins before the CFI dispatch even executes:
+
+```llvm
+call void @__coro_shadow_verify_resume(ptr %frame)   ; shadow: abort on mismatch
+call void @__coro_dispatch_resume(ptr %frame)        ; CFI: table dispatch (if we got here)
+call void @__coro_shadow_update(ptr %frame)          ; shadow: re-snapshot
+```
 
 ---
 
@@ -538,6 +845,26 @@ like the control-flow rows, attack 3 like the data-only row.)
   statement of the defense taxonomy: control-flow integrity, however complete,
   cannot address data-only corruption; that needs data integrity (here, the
   MPK-protected whole-frame shadow).
+
+**Example — two cells of row 1 (overflow), side by side.** Same attacker, two
+victim builds:
+
+```
+# overflow_victim (vulnerable):           # overflow_victim_shadow:
+[VICTIM] copied 88 bytes into 64-byte buf [VICTIM] copied 88 bytes into 64-byte buf
+[ATTACKER] RESUME -> OK                   [CoroShadow] ATTACK: resume_fn tampered on
+[VICTIM] *** HIJACK_TARGET executing ***    frame 0x…  expected 0x…550 got 0x…470
+                                          Aborted (core dumped)         <-- BLOCK(shadow)
+```
+
+**Example — two cells of row 5 (data-only).** Here `coro-cfi` is *not* enough:
+
+```
+# dataonly_victim_cfi (coro-aware CFI):   # dataonly_victim_shadow:
+[ATTACKER] SETPREF 18 1 ; TRIGGER         [ATTACKER] SETPREF 18 1 ; TRIGGER
+[VICTIM] *** ACCESS GRANTED ***           [CoroShadow] ATTACK: frame data tampered …
+  -> GRANTED(data): CFI never saw it        Aborted (core dumped)  -> BLOCK(shadow)
+```
 
 ---
 

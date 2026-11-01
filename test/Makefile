@@ -16,9 +16,9 @@
 #   make clean      clean every folder
 # Each folder also works standalone: `cd overflow && make run`.
 
-BENCHES := generic overflow uaf scheduler dataonly fakeframe
+BENCHES := generic overflow uaf scheduler dataonly fakeframe bench
 
-.PHONY: all variants matrix clean $(BENCHES)
+.PHONY: all variants matrix benchmark clean $(BENCHES)
 
 all:
 	@for d in $(BENCHES); do $(MAKE) --no-print-directory -C $$d all; done
@@ -28,6 +28,10 @@ variants:
 
 matrix: variants
 	@./run_matrix.sh
+
+# Performance overhead of the defenses (per-op ns, overhead %, shadow attribution).
+benchmark:
+	@./bench.sh
 
 clean:
 	@for d in $(BENCHES); do $(MAKE) --no-print-directory -C $$d clean; done

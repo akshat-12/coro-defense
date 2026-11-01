@@ -57,18 +57,27 @@ typedef struct __attribute__((aligned(64))) {
 static void *g_region = NULL;
 static ShadowEntry *g_table = NULL;
 static size_t g_region_sz = 0;
-static int g_pkey = -1; // >=0 when MPK is in use
+static int g_pkey = -1;     // >=0 when MPK is in use
+static int g_noprotect = 0; // measurement knob: skip all protection toggles
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // ── Protection toggling
 // ───────────────────────────────────────────────────────
+// With CORO_SHADOW_NOPROTECT set, the region stays read-write and the toggles
+// are no-ops. This isolates the snapshot cost (memcpy/memcmp) from the
+// protection cost (WRPKRU with MPK, or an mprotect syscall in fallback) so the
+// benchmark can attribute the shadow overhead. It is NOT a secure mode.
 static void make_writable(void) {
+    if (g_noprotect)
+        return;
     if (g_pkey >= 0)
         pkey_set(g_pkey, 0);
     else
         mprotect(g_region, g_region_sz, PROT_READ | PROT_WRITE);
 }
 static void make_readonly(void) {
+    if (g_noprotect)
+        return;
     if (g_pkey >= 0)
         pkey_set(g_pkey, PKEY_DISABLE_WRITE);
     else
@@ -95,19 +104,25 @@ __attribute__((constructor)) static void shadow_init(void) {
     memset(g_region, 0, g_region_sz);
     g_table = (ShadowEntry *)g_region;
 
-    // Try Intel MPK first.
-    g_pkey = pkey_alloc(0, 0);
-    if (g_pkey >= 0 &&
-        pkey_mprotect(g_region, g_region_sz, PROT_READ | PROT_WRITE, g_pkey) !=
-            0) {
-        pkey_free(g_pkey);
-        g_pkey = -1;
+    g_noprotect = (getenv("CORO_SHADOW_NOPROTECT") != NULL);
+
+    if (!g_noprotect) {
+        // Try Intel MPK first.
+        g_pkey = pkey_alloc(0, 0);
+        if (g_pkey >= 0 && pkey_mprotect(g_region,
+                                         g_region_sz,
+                                         PROT_READ | PROT_WRITE,
+                                         g_pkey) != 0) {
+            pkey_free(g_pkey);
+            g_pkey = -1;
+        }
+        make_readonly();
     }
 
-    make_readonly();
     fprintf(stderr,
             "[CoroShadow] shadow stack ready (%s, %u slots, %u B/frame)\n",
-            g_pkey >= 0 ? "MPK" : "mprotect fallback",
+            g_noprotect ? "NO-PROTECT (measurement only)"
+                        : (g_pkey >= 0 ? "MPK" : "mprotect fallback"),
             SHADOW_CAPACITY,
             MAX_FRAME);
 }

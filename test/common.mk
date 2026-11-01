@@ -54,13 +54,13 @@ $(1)_cfi: $(1).cpp
 $(1)_shadow: $(1).cpp
 	$$(DEFCLANG) $$(CXXFLAGS) $$(INCFLAGS) $$(VICTIM_FLAGS) -emit-llvm -S -o $(1)_shadow.ll $$<
 	$$(OPT) -load-pass-plugin=$$(PLUGIN) -passes="coro-shadow-analysis" -S $(1)_shadow.ll -o $(1)_shadow_opt.ll
-	$$(DEFCLANG) -g $(1)_shadow_opt.ll -o $$@ -L$$(RUNTIME) -lcoroshadow -lpthread
+	$$(DEFCLANG) -O1 -g $(1)_shadow_opt.ll -o $$@ -L$$(RUNTIME) -lcoroshadow -lpthread
 	@echo "Built: $$@  (Shadow Stack)"
 
 $(1)_both: $(1).cpp
 	$$(DEFCLANG) $$(CXXFLAGS) $$(INCFLAGS) $$(VICTIM_FLAGS) -emit-llvm -S -o $(1)_both.ll $$<
 	$$(OPT) -load-pass-plugin=$$(PLUGIN) -passes="coro-aware-cfi,coro-shadow-analysis" -S $(1)_both.ll -o $(1)_both_opt.ll
-	$$(DEFCLANG) -g $(1)_both_opt.ll -o $$@ -L$$(RUNTIME) -lcoroshadow -lpthread
+	$$(DEFCLANG) -O1 -g $(1)_both_opt.ll -o $$@ -L$$(RUNTIME) -lcoroshadow -lpthread
 	@echo "Built: $$@  (CFI + Shadow)"
 
 $(1)_VARIANTS := $(1) $(1)_cfibaseline $(1)_cet $(1)_cfi $(1)_shadow $(1)_both

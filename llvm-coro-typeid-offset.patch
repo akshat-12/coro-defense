@@ -1,0 +1,45 @@
+diff --git a/llvm/lib/Transforms/Coroutines/CoroEarly.cpp b/llvm/lib/Transforms/Coroutines/CoroEarly.cpp
+index 489106422..dd7334d8e 100644
+--- a/llvm/lib/Transforms/Coroutines/CoroEarly.cpp
++++ b/llvm/lib/Transforms/Coroutines/CoroEarly.cpp
+@@ -62,12 +62,17 @@ void Lowerer::lowerCoroPromise(CoroPromiseInst *Intrin) {
+   Value *Operand = Intrin->getArgOperand(0);
+   Align Alignment = Intrin->getAlignment();
+   Type *Int8Ty = Builder.getInt8Ty();
++  Type *Int32Ty = Builder.getInt32Ty();
+ 
+-  auto *SampleStruct =
+-      StructType::get(Context, {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int8Ty});
++  // CFOP defense: CoroFrame reserves a per-type TypeID (i32) header slot right
++  // after the resume/destroy pointers and *before* the promise.  The mock
++  // layout used to compute the promise offset must include it, so the promise
++  // field is element 3 (not 2) and lands at offset 20/24 instead of 16.
++  auto *SampleStruct = StructType::get(
++      Context, {AnyResumeFnPtrTy, AnyResumeFnPtrTy, Int32Ty, Int8Ty});
+   const DataLayout &DL = TheModule.getDataLayout();
+   int64_t Offset = alignTo(
+-      DL.getStructLayout(SampleStruct)->getElementOffset(2), Alignment);
++      DL.getStructLayout(SampleStruct)->getElementOffset(3), Alignment);
+   if (Intrin->isFromPromise())
+     Offset = -Offset;
+ 
+diff --git a/llvm/lib/Transforms/Coroutines/CoroFrame.cpp b/llvm/lib/Transforms/Coroutines/CoroFrame.cpp
+index e69c718f0..a5b116c27 100644
+--- a/llvm/lib/Transforms/Coroutines/CoroFrame.cpp
++++ b/llvm/lib/Transforms/Coroutines/CoroFrame.cpp
+@@ -1320,6 +1320,15 @@ static StructType *buildFrameType(Function &F, coro::Shape &Shape,
+     (void)B.addField(FnPtrTy, std::nullopt, /*header*/ true);
+     (void)B.addField(FnPtrTy, std::nullopt, /*header*/ true);
+ 
++    // CFOP defense (Coroutine-Aware CFI): reserve a header slot for the
++    // per-type TypeID used by the dispatch-table CFI pass.  It sits at a FIXED
++    // offset 16 (right after the two header pointers) *before* the promise, so
++    // the TypeID offset is the same for every coroutine type regardless of
++    // promise size.  CoroEarly::lowerCoroPromise is updated to match: it now
++    // accounts for this i32 when computing the promise offset (which therefore
++    // shifts from 16 to 20/24).  Both sides must stay in sync.
++    (void)B.addField(Type::getInt32Ty(C), std::nullopt, /*header*/ true);
++
+     // PromiseAlloca field needs to be explicitly added here because it's
+     // a header field with a fixed offset based on its alignment. Hence it
+     // needs special handling and cannot be added to FrameData.Allocas.

@@ -11,11 +11,12 @@
 
 #define DEBUG_TYPE "coro-aware-cfi"
 // Byte offset of the TypeID field in the coroutine frame.
-// The modified CoroFrame.cpp adds the TypeID as a header field *after* the
-// promise, so the promise keeps its ABI-fixed offset (16) that
-// coroutine_handle::from_promise() relies on. For this project's coroutines
-// (empty promise, 1 byte at offset 16) the i32 TypeID aligns to offset 20.
-#define CORO_TYPEID_OFFSET 20u // byte offset of TypeID in frame
+// The modified CoroFrame.cpp adds the TypeID as a header field right after the
+// resume/destroy pointers and *before* the promise, so the TypeID lands at a
+// FIXED offset 16 for every coroutine type regardless of promise size (the
+// promise is shifted to 20/24, and CoroEarly::lowerCoroPromise is updated to
+// match). This removes the previous dependency on promise size.
+#define CORO_TYPEID_OFFSET 16u // byte offset of TypeID in frame
 
 using namespace llvm;
 

@@ -1,16 +1,14 @@
 /*
- * bench.cpp — microbenchmark for the coroutine-defense overhead
+ * measuring_overhead.cpp — measure coroutine-defense overhead
  * =============================================================
  * Isolates the coroutine operations the defenses instrument (create / resume /
  * destroy) so overhead is visible rather than drowned by other work. Built in
  * every variant (vulnerable / cfibaseline / cet / cfi / shadow / both) with the
  * same compiler and flags, so the only difference is the defense.
  *
- *   ./bench <mode> [iters]
- *     resume         one coroutine, resumed N times           (per-resume cost)
- *     createdestroy  create+destroy N frames                  (ramp + destroy)
- *     resume-big     resume N times, frame padded to ~256 B   (snapshot size)
- *     amortized      resume N times with ~work between suspends (realistic %)
+ *   ./measuring_overhead <mode> [iters]
+ *     resume         one coroutine, resumed N times
+ *     createdestroy  create+destroy N frames
  *
  * Prints one machine-readable line to stdout:
  *   MODE=<m> ITERS=<n> NS_PER_OP=<x>
@@ -32,25 +30,6 @@ static Task spin() {
     for (;;) co_await std::suspend_always{};
 }
 
-// Same, but keeps a large array live across the suspend so the frame
-// approaches MAX_FRAME (256 B) — exercises the shadow's memcpy/memcmp.
-static Task spin_big() {
-    volatile unsigned char pad[200];
-    for (unsigned i = 0;; i++) {
-        co_await std::suspend_always{};
-        pad[i % sizeof pad]++;   // keep pad live and frame-resident
-    }
-}
-
-// Does a little work between suspends, so overhead is amortised (realistic).
-static Task spin_work() {
-    volatile unsigned long acc = 0;
-    for (;;) {
-        co_await std::suspend_always{};
-        for (int i = 0; i < 200; i++) acc += i * 2654435761u;  // ~a few hundred ns
-    }
-}
-
 // Create + park a coroutine, then let it be destroyed. Returns nothing; the
 // Task dtor calls handle.destroy().
 static void create_destroy_once() {
@@ -64,10 +43,8 @@ int main(int argc, char **argv) {
 
     double t0, t1;
 
-    if (mode == "resume" || mode == "resume-big" || mode == "amortized") {
-        Task t = (mode == "resume-big") ? spin_big()
-               : (mode == "amortized")  ? spin_work()
-                                        : spin();
+    if (mode == "resume") {
+        Task t = spin();
         t.handle.resume();                 // park
         t0 = now_ns();
         for (long i = 0; i < iters; i++) t.handle.resume();

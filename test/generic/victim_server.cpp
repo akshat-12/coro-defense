@@ -41,31 +41,41 @@ struct Task {
             return Task{
                 std::coroutine_handle<promise_type>::from_promise(*this)};
         }
+
         std::suspend_always initial_suspend() noexcept {
             return {};
         }
+
         std::suspend_always final_suspend() noexcept {
             return {};
         }
+
         void return_void() noexcept {}
+
         void unhandled_exception() noexcept {
             std::terminate();
         }
     };
+
     std::coroutine_handle<promise_type> handle;
 
     explicit Task(std::coroutine_handle<promise_type> h) noexcept
         : handle(h) {}
+
     Task() noexcept : handle(nullptr) {}
+
     Task(Task &&o) noexcept : handle(std::exchange(o.handle, nullptr)) {}
+
     Task &operator=(Task &&o) noexcept {
         if (handle)
             handle.destroy();
         handle = std::exchange(o.handle, nullptr);
         return *this;
     }
+
     Task(const Task &) = delete;
     Task &operator=(const Task &) = delete;
+
     ~Task() {
         if (handle)
             handle.destroy();
@@ -104,7 +114,7 @@ static Task worker_coro(int id) {
     fprintf(stderr,
             "[VICTIM] Worker-%d: running, suspended at checkpoint A\n",
             id);
-    co_await std::suspend_always{}; // attack window
+    co_await std::suspend_always{};  // attack window
     fprintf(stderr, "[VICTIM] Worker-%d: resumed past A\n", id);
     co_await std::suspend_always{};
     fprintf(stderr, "[VICTIM] Worker-%d: completed\n", id);
@@ -118,10 +128,10 @@ static bool g_privileged_ran = false;
 
 static Task privileged_coro() {
     volatile bool is_admin = false;
-    g_is_admin_ptr = &is_admin; // exposed via INFO
+    g_is_admin_ptr = &is_admin;  // exposed via INFO
     fprintf(stderr,
             "[VICTIM] PrivCoro: checking credentials, now suspended\n");
-    co_await std::suspend_always{}; // attack window: write is_admin here
+    co_await std::suspend_always{};  // attack window: write is_admin here
     g_is_admin_ptr = nullptr;
 
     if (is_admin) {
@@ -136,8 +146,9 @@ static Task privileged_coro() {
 // ── Attacker-visible state
 // ───────────────────────────────────────────────────
 static std::coroutine_handle<>
-    g_redirectable_handle{};                   // a bare void*; retargetable
-alignas(16) static uint8_t g_scratch_buf[512]; // staging area for a fake frame
+    g_redirectable_handle{};  // a bare void*; retargetable
+alignas(16) static uint8_t
+    g_scratch_buf[512];  // staging area for a fake frame
 static Task *g_worker = nullptr;
 static Task *g_priv = nullptr;
 
@@ -150,12 +161,12 @@ static void reset_state() {
 
     // Build each coroutine and resume once so it parks at its attack window.
     g_worker = new Task(worker_coro(1));
-    g_worker->handle.resume(); // suspended at checkpoint A
+    g_worker->handle.resume();  // suspended at checkpoint A
     g_priv = new Task(privileged_coro());
-    g_priv->handle.resume(); // suspended at the credential check
+    g_priv->handle.resume();  // suspended at the credential check
 
     g_redirectable_handle =
-        g_worker->handle; // models a handle in a scheduler queue
+        g_worker->handle;  // models a handle in a scheduler queue
     fprintf(stderr,
             "[VICTIM] State reset. worker_frame=%p\n",
             g_worker->handle.address());
@@ -190,8 +201,8 @@ static void handle_client(int fd) {
         if (strcmp(line, "INFO") == 0) {
             void *wf = g_worker->handle.address();
             void *rfn = nullptr, *dfn = nullptr;
-            memcpy(&rfn, (char *)wf + 0, 8); // resume pointer
-            memcpy(&dfn, (char *)wf + 8, 8); // destroy pointer
+            memcpy(&rfn, (char *)wf + 0, 8);  // resume pointer
+            memcpy(&dfn, (char *)wf + 8, 8);  // destroy pointer
             fprintf(tx,
                     "OK\n"
                     "worker_frame   %p\n"
@@ -225,8 +236,10 @@ static void handle_client(int fd) {
                 }
                 vuln_write_anywhere((void *)(uintptr_t)addr, data, (size_t)n);
                 fprintf(tx, "OK wrote %d bytes to 0x%llx\n", n, addr);
-                fprintf(
-                    stderr, "[VICTIM] Wrote %d bytes to 0x%llx\n", n, addr);
+                fprintf(stderr,
+                        "[VICTIM] Wrote %d bytes to 0x%llx\n",
+                        n,
+                        addr);
             }
 
         } else if (strcmp(line, "TRIGGER RESUME") == 0) {

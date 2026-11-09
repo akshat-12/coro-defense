@@ -1,0 +1,50 @@
+# coro-defense house style: 79-column, 4-space, readability-first.
+# clang-format auto-discovers this file for every source under coro-defense/.
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++20
+
+# ── Width & indentation ───────────────────────────────────────────────
+ColumnLimit: 79
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+NamespaceIndentation: None
+IndentCaseLabels: true
+
+# ── Don't collapse control flow onto one line (explicit, scannable) ────
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+
+# ── Braces ────────────────────────────────────────────────────────────
+BreakBeforeBraces: Attach
+
+# ── Pointers/references bind to the name (Value *x), matching the code ─
+PointerAlignment: Right
+ReferenceAlignment: Right
+
+# ── One argument/parameter per line when a call must wrap (no cramming)─
+BinPackArguments: false
+BinPackParameters: false
+AlignAfterOpenBracket: Align
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+
+# ── Comments ──────────────────────────────────────────────────────────
+ReflowComments: true
+AlignTrailingComments: true
+SpacesBeforeTrailingComments: 2
+
+# ── Vertical whitespace ───────────────────────────────────────────────
+MaxEmptyLinesToKeep: 1
+SeparateDefinitionBlocks: Always
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# ── Includes: sort within each existing group, don't merge groups ─────
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve

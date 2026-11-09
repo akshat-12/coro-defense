@@ -49,7 +49,7 @@ static void handle_client(int fd) {
     t.handle.resume();
     void *frame = t.handle.address();
     size_t sz = chunk_size(frame);
-    ready_queue.push_back(t.handle); // handle now lives in the queue
+    ready_queue.push_back(t.handle);  // handle now lives in the queue
 
     // BUG: the owning Task is torn down (frame freed) while its handle is
     // still queued -> a dangling queued handle. The staging buffer allocated
@@ -92,8 +92,9 @@ static void handle_client(int fd) {
                 reclaim[i] = (char)v;
             }
             fprintf(tx, "OK staged %zu bytes into the reclaimed frame\n", n);
-            fprintf(
-                stderr, "[VICTIM] staged %zu bytes into reclaimed frame\n", n);
+            fprintf(stderr,
+                    "[VICTIM] staged %zu bytes into reclaimed frame\n",
+                    n);
 
         } else if (!strcmp(line, "RUN")) {
             if (ready_queue.empty()) {
@@ -104,7 +105,7 @@ static void handle_client(int fd) {
                 fprintf(stderr,
                         "[VICTIM] scheduler resuming queued handle %p...\n",
                         h.address());
-                h.resume(); // dangling -> frame[0] (attacker)
+                h.resume();  // dangling -> frame[0] (attacker)
                 fprintf(tx, "OK\n");
             }
 
@@ -116,7 +117,7 @@ static void handle_client(int fd) {
         fflush(tx);
     }
     fclose(rx);
-    fclose(tx); // leak `reclaim` (holds the frame image)
+    fclose(tx);  // leak `reclaim` (holds the frame image)
 }
 
 int main() {

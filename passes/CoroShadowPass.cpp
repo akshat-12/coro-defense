@@ -26,8 +26,10 @@ static bool isRawCoroResume(CallBase *CB, const DataLayout &DL) {
     if (!Load)
         return false;
     APInt Off(64, 0);
-    Value *Base = Load->getPointerOperand()->stripAndAccumulateConstantOffsets(
-        DL, Off, true);
+    Value *Base =
+        Load->getPointerOperand()->stripAndAccumulateConstantOffsets(DL,
+                                                                     Off,
+                                                                     true);
     return Off.getZExtValue() == 0 &&
            Base->stripPointerCasts() ==
                CB->getArgOperand(0)->stripPointerCasts();
@@ -41,8 +43,10 @@ static bool isRawCoroDestroy(CallBase *CB, const DataLayout &DL) {
     if (!Load)
         return false;
     APInt Off(64, 0);
-    Value *Base = Load->getPointerOperand()->stripAndAccumulateConstantOffsets(
-        DL, Off, true);
+    Value *Base =
+        Load->getPointerOperand()->stripAndAccumulateConstantOffsets(DL,
+                                                                     Off,
+                                                                     true);
     return Off.getZExtValue() == 8 &&
            Base->stripPointerCasts() ==
                CB->getArgOperand(0)->stripPointerCasts();
@@ -150,7 +154,7 @@ PreservedAnalyses CoroShadowPass::run(Module &M, ModuleAnalysisManager &) {
 
             for (auto [CB, IsResume] : ToInstrument) {
                 Value *FramePtr = CB->getArgOperand(0);
-                IRBuilder<> B(CB); // insert BEFORE the call
+                IRBuilder<> B(CB);  // insert BEFORE the call
                 if (IsResume) {
                     B.CreateCall(VerifyResumeFn, {FramePtr});
                     // After a legitimate resume the frame has advanced to its

@@ -24,7 +24,7 @@ void CoroDefenseAnalysis::discoverTypes(Module &M) {
     // We scan all functions, group by base name, and assign TypeIDs.
 
     StringMap<CoroTypeRecord *> ByBase;
-    uint32_t NextID = 1; // 0 is reserved for noop_coroutine
+    uint32_t NextID = 1;  // 0 is reserved for noop_coroutine
 
     for (Function &F : M) {
         StringRef Name = F.getName();
@@ -119,7 +119,9 @@ void CoroDefenseAnalysis::discoverCallSites(Module &M) {
                 APInt Offset(64, 0);
                 Value *Base = Load->getPointerOperand()
                                   ->stripAndAccumulateConstantOffsets(
-                                      DL, Offset, /*AllowNonInbounds=*/true);
+                                      DL,
+                                      Offset,
+                                      /*AllowNonInbounds=*/true);
 
                 // The call argument must be the same base pointer
                 // (stripped of casts).

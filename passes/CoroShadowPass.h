@@ -8,4 +8,4 @@ struct CoroShadowPass : public PassInfoMixin<CoroShadowPass> {
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
 };
 
-} // namespace llvm
+}  // namespace llvm

@@ -3,8 +3,8 @@
  * =============================================================
  * Isolates the coroutine operations the defenses instrument (create / resume /
  * destroy) so overhead is visible rather than drowned by other work. Built in
- * every variant (vulnerable / cfibaseline / cet / cfi / shadow / both) with the
- * same compiler and flags, so the only difference is the defense.
+ * every variant (vulnerable / cfibaseline / cet / cfi / shadow / both) with
+ * the same compiler and flags, so the only difference is the defense.
  *
  *   ./measuring_overhead <mode> [iters]
  *     resume         one coroutine, resumed N times
@@ -27,14 +27,15 @@ static inline double now_ns() {
 
 // A coroutine that suspends forever, one co_await per resume.
 static Task spin() {
-    for (;;) co_await std::suspend_always{};
+    for (;;)
+        co_await std::suspend_always{};
 }
 
 // Create + park a coroutine, then let it be destroyed. Returns nothing; the
 // Task dtor calls handle.destroy().
 static void create_destroy_once() {
     Task t = spin();
-    t.handle.resume();   // one resume to leave initial_suspend and park
+    t.handle.resume();  // one resume to leave initial_suspend and park
 }
 
 int main(int argc, char **argv) {
@@ -45,15 +46,17 @@ int main(int argc, char **argv) {
 
     if (mode == "resume") {
         Task t = spin();
-        t.handle.resume();                 // park
+        t.handle.resume();  // park
         t0 = now_ns();
-        for (long i = 0; i < iters; i++) t.handle.resume();
+        for (long i = 0; i < iters; i++)
+            t.handle.resume();
         t1 = now_ns();
-        t.handle = nullptr;                // leak (spin never finishes)
+        t.handle = nullptr;  // leak (spin never finishes)
 
     } else if (mode == "createdestroy") {
         t0 = now_ns();
-        for (long i = 0; i < iters; i++) create_destroy_once();
+        for (long i = 0; i < iters; i++)
+            create_destroy_once();
         t1 = now_ns();
 
     } else {
@@ -62,6 +65,9 @@ int main(int argc, char **argv) {
     }
 
     double ns_per_op = (t1 - t0) / (double)iters;
-    printf("MODE=%s ITERS=%ld NS_PER_OP=%.4f\n", mode.c_str(), iters, ns_per_op);
+    printf("MODE=%s ITERS=%ld NS_PER_OP=%.4f\n",
+           mode.c_str(),
+           iters,
+           ns_per_op);
     return 0;
 }

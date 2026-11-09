@@ -8,4 +8,4 @@ struct CoroAwareCFIPass : public PassInfoMixin<CoroAwareCFIPass> {
     PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
 };
 
-} // namespace llvm
+}  // namespace llvm

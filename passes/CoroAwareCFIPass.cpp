@@ -16,7 +16,7 @@
 // FIXED offset 16 for every coroutine type regardless of promise size (the
 // promise is shifted to 20/24, and CoroEarly::lowerCoroPromise is updated to
 // match). This removes the previous dependency on promise size.
-#define CORO_TYPEID_OFFSET 16u // byte offset of TypeID in frame
+#define CORO_TYPEID_OFFSET 16u  // byte offset of TypeID in frame
 
 using namespace llvm;
 
@@ -56,8 +56,9 @@ static GlobalVariable *buildDispatchTable(Module &M,
     std::vector<Constant *> Entries(N);
 
     // Slot 0: noop_coroutine.
-    Entries[0] = ConstantStruct::get(
-        EntryTy, {getNoopStub(M, true), getNoopStub(M, false)});
+    Entries[0] =
+        ConstantStruct::get(EntryTy,
+                            {getNoopStub(M, true), getNoopStub(M, false)});
 
     // Slots 1..N-1: real coroutine types.
     for (auto &Rec : Types) {
@@ -73,7 +74,7 @@ static GlobalVariable *buildDispatchTable(Module &M,
 
     auto *Table = new GlobalVariable(M,
                                      TableTy,
-                                     /*isConstant=*/true, // → .rodata
+                                     /*isConstant=*/true,  // → .rodata
                                      GlobalValue::InternalLinkage,
                                      TableInit,
                                      "__coro_dispatch_table");
@@ -129,8 +130,10 @@ static Function *buildDispatchFn(Module &M,
     auto *TableTy = cast<ArrayType>(Table->getValueType());
     auto *EntryTy = cast<StructType>(TableTy->getElementType());
 
-    Value *EntryPtr = B.CreateInBoundsGEP(
-        TableTy, Table, {ConstantInt::get(I32Ty, 0), TID}, "entry.ptr");
+    Value *EntryPtr = B.CreateInBoundsGEP(TableTy,
+                                          Table,
+                                          {ConstantInt::get(I32Ty, 0), TID},
+                                          "entry.ptr");
     unsigned FieldIdx = IsResume ? 0 : 1;
     Value *FnPtrPtr =
         B.CreateStructGEP(EntryTy, EntryPtr, FieldIdx, "fn.slot");
@@ -215,9 +218,9 @@ static void replaceCallSites(std::vector<CoroCallSite> &Sites,
 PreservedAnalyses CoroAwareCFIPass::run(Module &M, ModuleAnalysisManager &) {
     CoroDefenseAnalysis A;
     if (!A.run(M))
-        return PreservedAnalyses::all(); // no coroutines
+        return PreservedAnalyses::all();  // no coroutines
 
-    unsigned NumSlots = (unsigned)A.Types.size() + 1; // +1 for noop at [0]
+    unsigned NumSlots = (unsigned)A.Types.size() + 1;  // +1 for noop at [0]
 
     GlobalVariable *Table = buildDispatchTable(M, A.Types);
 

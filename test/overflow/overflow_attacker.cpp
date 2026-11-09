@@ -15,10 +15,12 @@
 #include <unistd.h>
 
 static int sfd;
+
 static void sendline(const std::string &s) {
     std::string l = s + "\n";
     write(sfd, l.data(), l.size());
 }
+
 static std::string recvline() {
     std::string r;
     char c;
@@ -39,11 +41,11 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    printf("[ATTACKER] %s\n", recvline().c_str()); // READY banner
+    printf("[ATTACKER] %s\n", recvline().c_str());  // READY banner
 
     sendline("INFO");
     uintptr_t buf = 0, frame = 0, hj = 0;
-    recvline(); // "OK"
+    recvline();  // "OK"
     for (std::string l; (l = recvline()) != "END" && !l.empty();) {
         char k[64];
         unsigned long long v;

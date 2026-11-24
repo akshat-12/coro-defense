@@ -1,7 +1,6 @@
 # Top-level dispatcher for the CFOP benchmarks.
 # =============================================
 # Each benchmark lives in its own folder with its own Makefile:
-#   generic/    didactic arbitrary-write harness, 5 attacks      (:4444)
 #   overflow/   Primitive 1: heap overflow into adjacent frame   (:4445)
 #   uaf/        Primitive 2: use-after-free reclaim (in-process)
 #   scheduler/  Primitive 3: dangling handle in scheduler queue  (:4446)
@@ -16,7 +15,7 @@
 #   make clean      clean every folder
 # Each folder also works standalone: `cd overflow && make run`.
 
-BENCHES := generic overflow uaf scheduler dataonly fakeframe measuring_overhead
+BENCHES := overflow uaf scheduler dataonly fakeframe measuring_overhead
 
 .PHONY: all variants matrix measuring_overhead clean $(BENCHES)
 
